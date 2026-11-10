@@ -35,6 +35,9 @@ const ZONAS_ANATOMICAS = [
 ];
 
 export default function Roster({ user, categoryFilter }) {
+  // FIX INTELIGENTE: Detectar la categoría correcta del usuario al inicio
+  const defaultCat = user.role === 'DIRECTOR' || user.categories?.includes('ALL') ? 'Mayor' : user.categories[0];
+
   const [players, setPlayers] = useState([]);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -49,12 +52,13 @@ export default function Roster({ user, categoryFilter }) {
     name: '',
     dorsal: '',
     phone: '',
-    category: 'Mayor',
+    category: defaultCat, // Ahora usa la categoría del fisio automáticamente
     position: 'Defensa',
     weight: '',
     height: '',
     background: '',
   });
+  
   const [newInjuryForm, setNewInjuryForm] = useState({
     date: '',
     diagnosis: '',
@@ -68,6 +72,7 @@ export default function Roster({ user, categoryFilter }) {
     laterality: 'N/A',
     relapse: false,
   });
+  
   const [newEvolution, setNewEvolution] = useState('');
   const [attachedFile, setAttachedFile] = useState('');
   const [newWeight, setNewWeight] = useState('');
@@ -137,14 +142,16 @@ export default function Roster({ user, categoryFilter }) {
       .from('jugadores')
       .insert([newPlayer])
       .select();
+      
     if (data) {
       setPlayers([...players, data[0]]);
       setShowNewPlayer(false);
+      // Resetear el formulario respetando la categoría inteligente
       setNewPlayerForm({
         name: '',
         dorsal: '',
         phone: '',
-        category: 'Mayor',
+        category: defaultCat, 
         position: 'Defensa',
         weight: '',
         height: '',
