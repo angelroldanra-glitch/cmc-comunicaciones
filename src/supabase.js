@@ -1,9 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
-// 1. URL limpia (Sin el /rest/v1/ al final)
 const supabaseUrl = 'https://adxhdrnxbyzurjbhtogw.supabase.co';
-
-// 2. Usamos tu llave publishable (pública), nunca la secret.
-const supabaseKey = 'sb_publishable_vDpVpKoRm-p8kxecFbIISA_W_8YQYCN';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFkeGhkcm54Ynl6dXJqYmh0b2d3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQyNDI3ODIsImV4cCI6MjEwOTgxODc4Mn0.BVj1uEZwZ-FbPNAl4RbO5lwy5euFWblLBHMIbMmPV_I';
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
