@@ -286,4 +286,115 @@ export default function Matriz({ user, categoryFilter }) {
                   return (
                     <tr
                       key={p.id}
-                      className="hover:bg-blue-50/30 transition-colors
+                      className="hover:bg-blue-50/30 transition-colors"
+                    >
+                      <td className="p-4">
+                        <p className="font-bold text-gray-800 text-lg leading-tight">
+                          {p.name}
+                        </p>
+                        <p className="text-sm text-gray-500 font-medium">
+                          {p.category} • {p.position}
+                        </p>
+                      </td>
+
+                      <td className="p-4 text-center relative">
+                        <div className="flex items-center justify-center gap-2">
+                          <span
+                            className={`px-4 py-1.5 text-sm rounded-full font-bold shadow-sm border ${
+                              p.status === 'Apto'
+                                ? 'bg-green-100 text-green-700 border-green-200'
+                                : p.status === 'Baja'
+                                ? 'bg-red-100 text-red-700 border-red-200'
+                                : 'bg-yellow-100 text-yellow-700 border-yellow-200'
+                            }`}
+                          >
+                            {p.status}
+                          </span>
+                          {user.role === 'DIRECTOR' && (
+                            <button
+                              onClick={() =>
+                                setEditingStatus(
+                                  editingStatus === p.id ? null : p.id
+                                )
+                              }
+                              className="text-gray-400 hover:text-[#000080] transition"
+                            >
+                              <Edit3 size={16} />
+                            </button>
+                          )}
+                        </div>
+
+                        {editingStatus === p.id && user.role === 'DIRECTOR' && (
+                          <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-white border shadow-xl rounded-lg p-2 z-10 flex flex-col gap-1 w-32">
+                            <button
+                              onClick={() => handleStatusOverride(p.id, 'Apto')}
+                              className="text-xs font-bold text-green-700 bg-green-50 py-1 rounded"
+                            >
+                              Forzar: Apto
+                            </button>
+                            <button
+                              onClick={() =>
+                                handleStatusOverride(p.id, 'Diferenciado')
+                              }
+                              className="text-xs font-bold text-yellow-700 bg-yellow-50 py-1 rounded"
+                            >
+                              Diferenciado
+                            </button>
+                            <button
+                              onClick={() => handleStatusOverride(p.id, 'Baja')}
+                              className="text-xs font-bold text-red-700 bg-red-50 py-1 rounded"
+                            >
+                              Baja
+                            </button>
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="p-4">
+                        {lastInjury && p.status !== 'Apto' && (
+                          <div className="flex items-start gap-1.5 mb-2 text-sm text-red-800 bg-red-50 p-2 rounded-lg border border-red-100">
+                            <Activity
+                              size={14}
+                              className="mt-0.5 flex-shrink-0"
+                            />
+                            <span className="font-semibold leading-tight">
+                              {lastInjury.diagnosis}
+                            </span>
+                          </div>
+                        )}
+                        {p.comment && (
+                          <p className="text-xs text-gray-600 font-medium italic mb-2 border-l-2 border-blue-300 pl-2">
+                            {p.comment}
+                          </p>
+                        )}
+                        <input
+                          type="text"
+                          placeholder="Abordaje/Tratamiento de hoy..."
+                          className="w-full border border-gray-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-400 bg-gray-50"
+                          value={
+                            p.draftComment !== undefined ? p.draftComment : ''
+                          }
+                          onChange={(e) =>
+                            handleCommentChange(p.id, e.target.value)
+                          }
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
+            <button
+              onClick={handleSave}
+              className="bg-[#000080] hover:bg-blue-900 text-white px-6 py-3 rounded-xl flex items-center gap-2 font-bold shadow-md transition-all"
+            >
+              <Save size={20} /> Guardar en Expediente (Nube)
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
