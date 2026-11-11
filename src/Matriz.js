@@ -8,7 +8,7 @@ import {
   User,
   Activity,
 } from 'lucide-react';
-import { supabase } from './supabase'; // CONEXIÓN A SUPABASE
+import { supabase } from './supabase'; 
 
 export default function Matriz({ user, categoryFilter }) {
   const [players, setPlayers] = useState([]);
@@ -16,7 +16,6 @@ export default function Matriz({ user, categoryFilter }) {
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [editingStatus, setEditingStatus] = useState(null);
 
-  // 1. CARGAR JUGADORES DESDE LA NUBE
   const fetchPlayers = async () => {
     const { data, error } = await supabase
       .from('jugadores')
@@ -28,11 +27,9 @@ export default function Matriz({ user, categoryFilter }) {
       const processedPlayers = data.map((p) => {
         let currentStatus = p.status;
 
-        // Lógica automática: Si el timeLoss ya pasó, regresarlo a Apto (basado en su última lesión)
         if (p.status === 'Baja' && p.history && p.history.length > 0) {
           const lastInjury = p.history[p.history.length - 1];
           if (lastInjury && lastInjury.timeLoss > 0 && lastInjury.date) {
-            // Convirtiendo fecha DD/MM/YYYY a objeto Date
             const parts = lastInjury.date.split('/');
             if (parts.length === 3) {
               const injuryDate = new Date(parts[2], parts[1] - 1, parts[0]);
@@ -46,17 +43,11 @@ export default function Matriz({ user, categoryFilter }) {
         return { ...p, status: currentStatus };
       });
 
-      // FILTRO INTELIGENTE APLICADO AQUÍ
       const visible = processedPlayers.filter((p) => {
-        // Regla 1: Si es FISIO, solo ve lo que tiene en su gafete.
         const hasCategoryAccess = user.categories.includes(p.category);
-        
-        // Regla 2: Si es DIRECTOR, forzamos que SOLO vea la categoría 'Mayor' en esta pantalla.
         if (user.role === 'DIRECTOR') {
             return p.category === 'Mayor';
         }
-        
-        // Si no es director, aplicamos el filtro normal
         const matchesMenu = categoryFilter === 'Todas' || p.category === categoryFilter;
         return hasCategoryAccess && matchesMenu;
       });
@@ -75,17 +66,26 @@ export default function Matriz({ user, categoryFilter }) {
     );
   };
 
-  // FORZAR ESTADO EN LA NUBE
   const handleStatusOverride = async (id, newStatus) => {
     setPlayers(
       players.map((p) => (p.id === id ? { ...p, status: newStatus } : p))
     );
     setEditingStatus(null);
-    // Actualizar directamente en la base de datos
     await supabase.from('jugadores').update({ status: newStatus }).eq('id', id);
   };
 
-  // GUARDAR OBSERVACIONES COMO EVOLUCIÓN EN LA NUBE
+  // <-- NUEVA FUNCIÓN PARA CAMBIAR CRIOTERAPIA / MASAJE
+  const handleTherapyToggle = async (id, field, currentValue) => {
+    // Protección doble de seguridad
+    if (user.username !== 'lft.mayor2') return;
+
+    const newValue = !currentValue;
+    // Actualiza UI rápido
+    setPlayers(players.map((p) => (p.id === id ? { ...p, [field]: newValue } : p)));
+    // Guarda directo en la base de datos
+    await supabase.from('jugadores').update({ [field]: newValue }).eq('id', id);
+  };
+
   const handleSave = async () => {
     for (const p of players) {
       if (p.draftComment) {
@@ -95,7 +95,6 @@ export default function Matriz({ user, categoryFilter }) {
         };
         const currentEvo = p.evolution || [];
 
-        // Guardar nota en la evolución del jugador en Supabase
         await supabase
           .from('jugadores')
           .update({ evolution: [...currentEvo, newEvo] })
@@ -113,15 +112,14 @@ export default function Matriz({ user, categoryFilter }) {
     setTimeout(() => setSavedSuccess(false), 3000);
   };
 
-  // PDF EN FORMATO CARTA NARRATIVA (INTACTO)
   const generarParteMedico = () => {
+    // ... Todo este bloque del PDF se mantiene sin tocar ...
     const ventana = window.open('', '_blank');
     const lesionados = players.filter(
       (p) => p.status === 'Baja' || p.status === 'Diferenciado'
     );
     const todosAptos = lesionados.length === 0;
 
-    // Para el título del reporte, usamos 'Mayor' si es director, o el filtro si es fisio
     const tituloCategoria = user.role === 'DIRECTOR' ? 'Mayor' : categoryFilter;
 
     let reporteHTML = '';
@@ -271,7 +269,10 @@ export default function Matriz({ user, categoryFilter }) {
                   <th className="p-4 font-semibold text-center w-1/6">
                     Estado Clínico
                   </th>
-                  <th className="p-4 font-semibold w-7/12">
+                  <th className="p-4 font-semibold text-center w-1/6"> {/* NUEVA COLUMNA */}
+                    Terapia (Diaria)
+                  </th>
+                  <th className="p-4 font-semibold w-5/12">
                     Resumen / Abordaje de Hoy
                   </th>
                 </tr>
@@ -283,6 +284,9 @@ export default function Matriz({ user, categoryFilter }) {
                       ? p.history[p.history.length - 1]
                       : null;
 
+                  // CONDICIÓN PARA HABILITAR/DESHABILITAR CHECKS
+                  const isTherapyDisabled = user.username !== 'lft.mayor2'; 
+                  
                   return (
                     <tr
                       key={p.id}
@@ -348,6 +352,32 @@ export default function Matriz({ user, categoryFilter }) {
                             </button>
                           </div>
                         )}
+                      </td>
+
+                      {/* NUEVA CELDA: CHECKS DE CRIOTERAPIA Y MASAJE */}
+                      <td className="p-4">
+                        <div className="flex flex-col gap-2 bg-gray-50 border p-2 rounded-lg">
+                          <label className={`flex items-center gap-2 text-xs font-bold ${isTherapyDisabled ? 'text-gray-400 cursor-not-allowed' : 'text-blue-900 cursor-pointer'}`}>
+                            <input 
+                              type="checkbox" 
+                              disabled={isTherapyDisabled}
+                              checked={p.crioterapia || false}
+                              onChange={() => handleTherapyToggle(p.id, 'crioterapia', p.crioterapia || false)}
+                              className="w-4 h-4 text-blue-600 disabled:opacity-50"
+                            />
+                            Crioterapia
+                          </label>
+                          <label className={`flex items-center gap-2 text-xs font-bold ${isTherapyDisabled ? 'text-gray-400 cursor-not-allowed' : 'text-blue-900 cursor-pointer'}`}>
+                            <input 
+                              type="checkbox" 
+                              disabled={isTherapyDisabled}
+                              checked={p.masaje || false}
+                              onChange={() => handleTherapyToggle(p.id, 'masaje', p.masaje || false)}
+                              className="w-4 h-4 text-blue-600 disabled:opacity-50"
+                            />
+                            Masaje
+                          </label>
+                        </div>
                       </td>
 
                       <td className="p-4">
