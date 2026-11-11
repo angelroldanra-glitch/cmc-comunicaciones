@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   HeartPulse,
   CheckCircle,
@@ -7,108 +7,122 @@ import {
   Send,
   Phone,
 } from 'lucide-react';
+import { supabase } from './supabase'; // CONEXIÓN A SUPABASE
 
 export default function Triage({ user }) {
-  // Base de datos de casos (Ahora incluye el teléfono del jugador)
-  const [casos, setCasos] = useState([
-    {
-      id: 1,
-      name: 'Luis Pérez',
-      phone: '55551234',
-      category: 'Sub-15',
-      diagnostic: 'Posible esguince de tobillo',
-      reason:
-        'Dolor agudo en rodilla derecha post-partido. Inflamación visible.',
-      priority: 'Alta',
-      status: 'Pendiente',
-      from: 'Cristian (Inferiores)',
-      recommendation: '',
-    },
-  ]);
-
+  // Bandeja conectada a la nube
+  const [casos, setCasos] = useState([]);
   const [showReply, setShowReply] = useState(false);
   const [activeCaso, setActiveCaso] = useState(null);
   const [replyText, setReplyText] = useState('');
 
-  // Formulario del Fisio
-  const [nuevoCaso, setNuevoCaso] = useState({
-    name: '',
-    phone: '',
-    category: 'Sub-15',
-    diagnostic: '',
-    reason: '',
-    priority: 'Media',
-  });
-  const [enviado, setEnviado] = useState(false);
+  // ESCÁNER EN VIVO: Busca en Supabase todas las lesiones con sello de interconsulta
+  const fetchInterconsultas = async () => {
+    const { data, error } = await supabase.from('jugadores').select('*');
+    if (data) {
+      let interconsultasExtraidas = [];
 
-  // FISIO: Enviar nuevo caso
-  const enviarTriage = (e) => {
-    e.preventDefault();
-    setCasos([
-      ...casos,
-      {
-        ...nuevoCaso,
-        id: casos.length + 1,
-        status: 'Pendiente',
-        from: user.name,
-        recommendation: '',
-      },
-    ]);
-    setNuevoCaso({
-      name: '',
-      phone: '',
-      category: 'Sub-15',
-      diagnostic: '',
-      reason: '',
-      priority: 'Media',
-    });
-    setEnviado(true);
-    setTimeout(() => setEnviado(false), 3000);
+      data.forEach((jugador) => {
+        if (jugador.history && jugador.history.length > 0) {
+          jugador.history.forEach((lesion, index) => {
+            if (lesion.interconsulta === true) {
+              // Convertir la lesión en formato de "Caso de Triage"
+              interconsultasExtraidas.push({
+                id: `${jugador.id}-${index}`, // ID único combinando el ID del jugador y el index de la lesión
+                jugadorId: jugador.id,
+                historialIndex: index,
+                name: jugador.name,
+                phone: jugador.phone,
+                category: jugador.category,
+                diagnostic: lesion.diagnosis,
+                reason: lesion.historyText,
+                priority: lesion.timeLoss > 3 ? 'Alta' : 'Media',
+                status: lesion.statusInterconsulta || 'Pendiente', // Si no tiene status, es Pendiente
+                from: 'Fisioterapeuta',
+                recommendation: lesion.recommendation || '',
+              });
+            }
+          });
+        }
+      });
+
+      // Ordenar para que los pendientes salgan de primero
+      interconsultasExtraidas.sort((a, b) => a.status === 'Pendiente' ? -1 : 1);
+      setCasos(interconsultasExtraidas);
+    }
   };
 
-  // DIRECTOR: Citar a Central
-  const aceptarCaso = (id) => {
-    setCasos(
-      casos.map((c) =>
-        c.id === id ? { ...c, status: 'Cita en Clínica Central' } : c
-      )
-    );
+  // Escanear apenas se abre la pantalla
+  useEffect(() => {
+    fetchInterconsultas();
+  }, []);
+
+
+  // =========================================================================
+  // ACCIONES DEL DIRECTOR MÉDICO (Actualizan el estado de la interconsulta en Supabase)
+  // =========================================================================
+  const actualizarStatusEnNube = async (caso, nuevoStatus, nuevaRecomendacion = '') => {
+    // 1. Obtener al jugador de la base de datos
+    const { data: jugadorData } = await supabase
+      .from('jugadores')
+      .select('history')
+      .eq('id', caso.jugadorId)
+      .single();
+
+    if (jugadorData) {
+      // 2. Modificar su historial para agregar el status y recomendación del Director
+      let historialActualizado = [...jugadorData.history];
+      historialActualizado[caso.historialIndex].statusInterconsulta = nuevoStatus;
+      if (nuevaRecomendacion) {
+        historialActualizado[caso.historialIndex].recommendation = nuevaRecomendacion;
+      }
+
+      // 3. Guardarlo de vuelta en Supabase
+      await supabase
+        .from('jugadores')
+        .update({ history: historialActualizado })
+        .eq('id', caso.jugadorId);
+
+      // Refrescar la pantalla
+      fetchInterconsultas();
+    }
   };
 
-  // DIRECTOR: Enviar Indicación Remota
+  const aceptarCaso = (caso) => {
+    actualizarStatusEnNube(caso, 'Cita en Clínica Central');
+  };
+
   const enviarRecomendacion = (e) => {
     e.preventDefault();
-    setCasos(
-      casos.map((c) =>
-        c.id === activeCaso.id
-          ? {
-              ...c,
-              status: 'Indicación Remota Enviada',
-              recommendation: replyText,
-            }
-          : c
-      )
-    );
+    actualizarStatusEnNube(activeCaso, 'Indicación Remota Enviada', replyText);
     setShowReply(false);
     setReplyText('');
   };
 
+
+  // =========================================================================
   // NOTIFICACIÓN AUTOMÁTICA POR WHATSAPP
+  // =========================================================================
   const notificarWhatsApp = (caso) => {
     let mensaje = '';
     if (caso.status === 'Cita en Clínica Central') {
-      mensaje = `Hola ${caso.name}, te saluda el Depto. Médico de Comunicaciones F.C.\n\nEl Dr. Angel Roldan ha revisado tu caso y te ha citado a la Clínica Central para una evaluación médica. Por favor confirmar de recibido y coordinar tu llegada.`;
+      mensaje = `Hola ${caso.name}, te saluda el Depto. Médico de Comunicaciones F.C.\n\nEl Dr. Angel Roldan ha revisado tu caso clínico y te ha citado a la Clínica Central para una evaluación médica. Por favor confirmar de recibido y coordinar tu llegada.`;
     } else {
       mensaje = `Hola ${caso.name}, te saluda el Depto. Médico de Comunicaciones F.C.\n\nEl Dr. Angel Roldan ha evaluado tu reporte y dejó la siguiente indicación médica: *"${caso.recommendation}"*.\n\nPor favor acércate a tu fisioterapeuta de categoría para seguir este proceso.`;
     }
 
-    // Formatea el teléfono (elimina espacios o guiones) y abre la URL de WhatsApp
-    const telefonoLimpio = caso.phone.replace(/\D/g, '');
+    const telefonoLimpio = caso.phone ? caso.phone.replace(/\D/g, '') : '';
+    if (!telefonoLimpio) {
+      alert("Este jugador no tiene un número de teléfono registrado.");
+      return;
+    }
+    
     window.open(
       `https://wa.me/${telefonoLimpio}?text=${encodeURIComponent(mensaje)}`,
       '_blank'
     );
   };
+
 
   // ==========================================
   // VISTA PARA LOS FISIOTERAPEUTAS
@@ -117,180 +131,59 @@ export default function Triage({ user }) {
     return (
       <div className="p-4 md:p-6 animate-fade-in">
         <h2 className="text-2xl font-bold text-red-700 mb-6 flex items-center gap-2 border-b pb-2">
-          <HeartPulse /> Triage e Interconsultas
+          <HeartPulse /> Respuestas del Director Médico
         </h2>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Formulario de Envío (Fisio) */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-bold text-[#000080] mb-4">
-              Enviar Caso al Director Médico
-            </h3>
-            {enviado && (
-              <div className="mb-4 bg-green-100 text-green-800 p-3 rounded-xl font-bold border border-green-300 flex items-center gap-2">
-                <CheckCircle size={18} /> ¡Caso enviado con éxito!
-              </div>
-            )}
-
-            <form onSubmit={enviarTriage} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="font-bold text-xs text-gray-600">
-                    Jugador
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    className="w-full border p-2 rounded-xl mt-1 text-sm"
-                    value={nuevoCaso.name}
-                    onChange={(e) =>
-                      setNuevoCaso({ ...nuevoCaso, name: e.target.value })
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-xs text-gray-600">
-                    Teléfono (WhatsApp)
-                  </label>
-                  <input
-                    type="tel"
-                    required
-                    className="w-full border p-2 rounded-xl mt-1 text-sm"
-                    value={nuevoCaso.phone}
-                    onChange={(e) =>
-                      setNuevoCaso({ ...nuevoCaso, phone: e.target.value })
-                    }
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="font-bold text-xs text-gray-600">
-                    Categoría
-                  </label>
-                  <select
-                    className="w-full border p-2 rounded-xl mt-1 text-sm"
-                    value={nuevoCaso.category}
-                    onChange={(e) =>
-                      setNuevoCaso({ ...nuevoCaso, category: e.target.value })
-                    }
-                  >
-                    {user.categories.map(
-                      (c) =>
-                        c !== 'ALL' && (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        )
-                    )}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-bold text-xs text-gray-600">
-                    Prioridad
-                  </label>
-                  <select
-                    className="w-full border p-2 rounded-xl mt-1 text-sm"
-                    value={nuevoCaso.priority}
-                    onChange={(e) =>
-                      setNuevoCaso({ ...nuevoCaso, priority: e.target.value })
-                    }
-                  >
-                    <option value="Baja">Baja (Rutina)</option>
-                    <option value="Media">Media (Molestia)</option>
-                    <option value="Alta">Alta (Trauma/Aguda)</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="font-bold text-xs text-gray-600">
-                  Diagnóstico Preliminar
-                </label>
-                <input
-                  type="text"
-                  required
-                  className="w-full border p-2 rounded-xl mt-1 text-sm"
-                  value={nuevoCaso.diagnostic}
-                  onChange={(e) =>
-                    setNuevoCaso({ ...nuevoCaso, diagnostic: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <label className="font-bold text-xs text-gray-600">
-                  Motivo Clínico de Envío
-                </label>
-                <textarea
-                  required
-                  rows="2"
-                  className="w-full border p-2 rounded-xl mt-1 text-sm"
-                  value={nuevoCaso.reason}
-                  onChange={(e) =>
-                    setNuevoCaso({ ...nuevoCaso, reason: e.target.value })
-                  }
-                ></textarea>
-              </div>
-              <button
-                type="submit"
-                className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl flex justify-center items-center gap-2 shadow-md transition-all"
-              >
-                <Send size={18} /> Enviar a Clínica Central
-              </button>
-            </form>
-          </div>
-
-          {/* Bandeja de Respuestas (Fisio) */}
-          <div className="bg-gray-50 p-6 rounded-2xl shadow-inner border border-gray-200">
-            <h3 className="text-lg font-bold text-gray-700 mb-4">
-              Respuestas del Director Médico
-            </h3>
-            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-              {casos
-                .filter((c) => user.categories.includes(c.category))
-                .map((caso) => (
-                  <div
-                    key={caso.id}
-                    className={`bg-white border-l-4 p-4 rounded-xl shadow-sm ${
-                      caso.status === 'Pendiente'
-                        ? 'border-gray-400'
-                        : caso.status.includes('Cita')
-                        ? 'border-red-500'
-                        : 'border-blue-500'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <h4 className="font-bold text-gray-800">{caso.name}</h4>
-                      <span
-                        className={`text-xs px-2 py-1 rounded-full font-bold ${
-                          caso.status === 'Pendiente'
-                            ? 'bg-gray-100 text-gray-600'
-                            : caso.status.includes('Cita')
-                            ? 'bg-red-100 text-red-700'
-                            : 'bg-blue-100 text-blue-700'
-                        }`}
-                      >
-                        {caso.status}
-                      </span>
-                    </div>
-                    {caso.recommendation && (
-                      <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg mt-2">
-                        <p className="text-[10px] text-blue-600 font-bold uppercase mb-1">
-                          Indicación del Dr. Angel:
-                        </p>
-                        <p className="text-sm font-semibold text-blue-900 leading-tight">
-                          "{caso.recommendation}"
-                        </p>
-                      </div>
-                    )}
+        <div className="bg-gray-50 p-6 rounded-2xl shadow-inner border border-gray-200">
+          <p className="text-gray-600 mb-6 font-medium">
+            Nota: Para solicitar una nueva interconsulta, ve a la pestaña <strong>Roster</strong>, busca al jugador, haz clic en "Registrar Lesión" y marca la casilla amarilla de Interconsulta.
+          </p>
+          
+          <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+            {casos
+              .filter((c) => user.categories.includes(c.category))
+              .map((caso) => (
+                <div
+                  key={caso.id}
+                  className={`bg-white border-l-4 p-4 rounded-xl shadow-sm ${
+                    caso.status === 'Pendiente'
+                      ? 'border-gray-400'
+                      : caso.status.includes('Cita')
+                      ? 'border-red-500'
+                      : 'border-blue-500'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <h4 className="font-bold text-gray-800">{caso.name}</h4>
+                    <span
+                      className={`text-xs px-2 py-1 rounded-full font-bold ${
+                        caso.status === 'Pendiente'
+                          ? 'bg-gray-100 text-gray-600'
+                          : caso.status.includes('Cita')
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-blue-100 text-blue-700'
+                      }`}
+                    >
+                      {caso.status}
+                    </span>
                   </div>
-                ))}
-              {casos.filter((c) => user.categories.includes(c.category))
-                .length === 0 && (
-                <p className="text-gray-500 italic text-sm text-center mt-10">
-                  No has enviado interconsultas aún.
-                </p>
-              )}
-            </div>
+                  {caso.recommendation && (
+                    <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg mt-2">
+                      <p className="text-[10px] text-blue-600 font-bold uppercase mb-1">
+                        Indicación del Dr. Angel:
+                      </p>
+                      <p className="text-sm font-semibold text-blue-900 leading-tight">
+                        "{caso.recommendation}"
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            {casos.filter((c) => user.categories.includes(c.category)).length === 0 && (
+              <p className="text-gray-500 italic text-sm text-center mt-10">
+                No hay interconsultas activas en tu categoría.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -311,9 +204,7 @@ export default function Triage({ user }) {
           <div
             key={caso.id}
             className={`bg-white border-l-4 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all ${
-              caso.status === 'Pendiente'
-                ? 'border-red-500'
-                : 'border-green-500'
+              caso.status === 'Pendiente' ? 'border-red-500' : 'border-green-500'
             }`}
           >
             <div className="flex justify-between items-start mb-2">
@@ -323,7 +214,7 @@ export default function Triage({ user }) {
                 </h3>
                 <p className="text-sm text-gray-500 font-medium">
                   {caso.category} • <Phone size={12} className="inline" />{' '}
-                  {caso.phone}
+                  {caso.phone || 'Sin número'}
                 </p>
               </div>
               <span
@@ -338,12 +229,12 @@ export default function Triage({ user }) {
             </div>
 
             <p className="text-xs text-gray-400 mb-3 flex items-center gap-1 font-bold">
-              <AlertTriangle size={14} /> Reporta: {caso.from}
+              <AlertTriangle size={14} /> Reportado vía Roster Clínico
             </p>
 
             <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 mb-4">
               <p className="text-xs font-bold text-gray-500 uppercase mb-1">
-                Diagnóstico & Motivo:
+                Diagnóstico Exacto:
               </p>
               <p className="text-sm text-gray-800 font-medium mb-1">
                 {caso.diagnostic}
@@ -355,7 +246,7 @@ export default function Triage({ user }) {
             {caso.status === 'Pendiente' ? (
               <div className="flex gap-2 mt-auto">
                 <button
-                  onClick={() => aceptarCaso(caso.id)}
+                  onClick={() => aceptarCaso(caso)}
                   className="flex-1 bg-red-50 text-red-700 border border-red-200 hover:bg-red-600 hover:text-white font-bold py-2 rounded-xl text-sm transition-colors shadow-sm"
                 >
                   Citar a Clínica
@@ -375,22 +266,22 @@ export default function Triage({ user }) {
                 <div className="w-full bg-green-50 text-green-800 border border-green-200 text-center font-bold py-2 rounded-xl text-sm mb-2">
                   {caso.status}
                 </div>
-
-                {/* BOTÓN MÁGICO DE WHATSAPP */}
                 <button
                   onClick={() => notificarWhatsApp(caso)}
                   className="w-full bg-[#25D366] hover:bg-[#1ebe5d] text-white font-bold py-2 rounded-xl text-sm flex justify-center items-center gap-2 shadow-md transition-all"
                 >
-                  <MessageSquare size={16} /> Notificar al Jugador
+                  <MessageSquare size={16} /> Notificar por WhatsApp
                 </button>
               </div>
             )}
           </div>
         ))}
         {casos.length === 0 && (
-          <p className="text-gray-500 col-span-3 text-center py-10">
-            Bandeja limpia. No hay casos pendientes.
-          </p>
+          <div className="col-span-3 text-center py-10 bg-white border rounded-2xl">
+            <CheckCircle size={48} className="mx-auto text-green-300 mb-3" />
+            <p className="text-gray-500 font-bold text-lg">Bandeja limpia.</p>
+            <p className="text-gray-400 text-sm">No hay interconsultas clínicas pendientes.</p>
+          </div>
         )}
       </div>
 
@@ -402,8 +293,7 @@ export default function Triage({ user }) {
               Indicación para Fisio / Jugador
             </h3>
             <p className="text-sm text-gray-500 mb-4">
-              Esta nota será visible para el fisioterapeuta y se enviará por
-              WhatsApp al jugador.
+              Esta nota será visible para el fisioterapeuta y se enviará por WhatsApp al jugador.
             </p>
             <form onSubmit={enviarRecomendacion}>
               <textarea
