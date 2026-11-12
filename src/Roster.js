@@ -14,28 +14,19 @@ import {
   Phone,
   Paperclip,
   FileText,
-  Edit
+  Edit,
+  Camera,
+  Edit2
 } from 'lucide-react';
 import { supabase } from './supabase'; 
 
 const ZONAS_ANATOMICAS = [
-  'Cabeza',
-  'Cuello',
-  'Hombro',
-  'Pecho',
-  'Abdomen',
-  'Espalda',
-  'Ingle/Pubis',
-  'Muslo (Cuádriceps)',
-  'Muslo (Isquiotibial)',
-  'Rodilla',
-  'Pantorrilla',
-  'Tobillo',
-  'Pie',
+  'Cabeza', 'Cuello', 'Hombro', 'Pecho', 'Abdomen', 'Espalda', 'Ingle/Pubis',
+  'Muslo (Cuádriceps)', 'Muslo (Isquiotibial)', 'Rodilla', 'Pantorrilla', 'Tobillo', 'Pie'
 ];
 
 export default function Roster({ user, categoryFilter }) {
-  const defaultCat = user.role === 'DIRECTOR' || user.categories?.includes('ALL') ? 'Mayor' : user.categories[0];
+  const defaultCat = user.role === 'DIRECTOR' || user.role === 'CT' || user.categories?.includes('ALL') ? 'Mayor' : user.categories[0];
 
   const [players, setPlayers] = useState([]);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
@@ -44,12 +35,14 @@ export default function Roster({ user, categoryFilter }) {
   const [showNewPlayer, setShowNewPlayer] = useState(false);
   const [showEditPlayer, setShowEditPlayer] = useState(false);
   const [showNewInjury, setShowNewInjury] = useState(false);
+  const [showEditInjury, setShowEditInjury] = useState(false);
   const [showExams, setShowExams] = useState(false);
   const [showEvolution, setShowEvolution] = useState(false);
   const [showWeight, setShowWeight] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const [newPlayerForm, setNewPlayerForm] = useState({
-    name: '', dorsal: '', phone: '', category: defaultCat, position: 'Defensa', weight: '', height: '', background: '',
+    name: '', dorsal: '', phone: '', category: defaultCat, position: 'Defensa', weight: '', height: '', background: '', photo_url: ''
   });
 
   const [editPlayerForm, setEditPlayerForm] = useState({});
@@ -57,6 +50,9 @@ export default function Roster({ user, categoryFilter }) {
   const [newInjuryForm, setNewInjuryForm] = useState({
     date: '', diagnosis: '', area: '', historyText: '', treatment: '', medId: '', medQty: '', timeLoss: '0', context: 'Entrenamiento', laterality: 'N/A', relapse: false, interconsulta: false,
   });
+
+  const [editInjuryForm, setEditInjuryForm] = useState({});
+  const [editingInjuryIndex, setEditingInjuryIndex] = useState(null);
   
   const [newEvolution, setNewEvolution] = useState('');
   const [attachedFile, setAttachedFile] = useState('');
@@ -70,25 +66,16 @@ export default function Roster({ user, categoryFilter }) {
   const [categoryMeds, setCategoryMeds] = useState([]); 
 
   const fetchPlayers = async () => {
-    const { data } = await supabase
-      .from('jugadores')
-      .select('*')
-      .order('name', { ascending: true });
+    const { data } = await supabase.from('jugadores').select('*').order('name', { ascending: true });
     if (data) setPlayers(data);
   };
 
-  useEffect(() => {
-    fetchPlayers();
-  }, []);
+  useEffect(() => { fetchPlayers(); }, []);
 
   useEffect(() => {
     if (showNewInjury && selectedPlayer) {
       const fetchMeds = async () => {
-        const { data } = await supabase
-          .from('kardex_categorias')
-          .select('*')
-          .eq('category', selectedPlayer.category)
-          .gt('quantity', 0);
+        const { data } = await supabase.from('kardex_categorias').select('*').eq('category', selectedPlayer.category).gt('quantity', 0);
         setCategoryMeds(data || []);
       };
       fetchMeds();
@@ -97,33 +84,44 @@ export default function Roster({ user, categoryFilter }) {
 
   const canAddPlayer = user.role === 'DIRECTOR' || user.role === 'FISIO';
 
+  // --- SUBIDA DE FOTO A SUPABASE STORAGE ---
+  const handlePhotoUpload = async (e, setFormFunc) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}.${fileExt}`;
+    const filePath = `${fileName}`;
+
+    setIsUploading(true);
+    const { error: uploadError } = await supabase.storage.from('perfiles').upload(filePath, file);
+    
+    if (uploadError) {
+      alert('Error subiendo imagen: ' + uploadError.message);
+      setIsUploading(false);
+    } else {
+      const { data } = supabase.storage.from('perfiles').getPublicUrl(filePath);
+      setFormFunc(prev => ({ ...prev, photo_url: data.publicUrl }));
+      setIsUploading(false);
+    }
+  };
+
   const handleAddPlayer = async (e) => {
     e.preventDefault();
     const newPlayer = {
       ...newPlayerForm,
-      // Solo convierte a número si el usuario escribió algo; si no, lo deja nulo
       dorsal: newPlayerForm.dorsal ? Number(newPlayerForm.dorsal) : null,
       weight: newPlayerForm.weight ? Number(newPlayerForm.weight) : null,
       height: newPlayerForm.height ? Number(newPlayerForm.height) : null,
-      status: 'Apto',
-      history: [],
-      evolution: [],
-      // Solo registra historial de peso inicial si de verdad ingresó un peso
-      weightHistory: newPlayerForm.weight ? [
-        {
-          date: new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
-          weight: Number(newPlayerForm.weight),
-        },
-      ] : [],
+      status: 'Apto', history: [], evolution: [],
+      weightHistory: newPlayerForm.weight ? [{ date: new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }), weight: Number(newPlayerForm.weight) }] : [],
     };
 
     const { data } = await supabase.from('jugadores').insert([newPlayer]).select();
     if (data) {
       setPlayers([...players, data[0]]);
       setShowNewPlayer(false);
-      setNewPlayerForm({
-        name: '', dorsal: '', phone: '', category: defaultCat, position: 'Defensa', weight: '', height: '', background: '',
-      });
+      setNewPlayerForm({ name: '', dorsal: '', phone: '', category: defaultCat, position: 'Defensa', weight: '', height: '', background: '', photo_url: '' });
     }
   };
 
@@ -132,31 +130,20 @@ export default function Roster({ user, categoryFilter }) {
     const updatedData = {
       name: editPlayerForm.name,
       dorsal: editPlayerForm.dorsal ? Number(editPlayerForm.dorsal) : null,
-      phone: editPlayerForm.phone || '',
-      category: editPlayerForm.category,
-      position: editPlayerForm.position,
-      weight: editPlayerForm.weight ? Number(editPlayerForm.weight) : null,
-      height: editPlayerForm.height ? Number(editPlayerForm.height) : null,
-      background: editPlayerForm.background || '',
+      phone: editPlayerForm.phone || '', category: editPlayerForm.category, position: editPlayerForm.position,
+      weight: editPlayerForm.weight ? Number(editPlayerForm.weight) : null, height: editPlayerForm.height ? Number(editPlayerForm.height) : null, background: editPlayerForm.background || '', photo_url: editPlayerForm.photo_url || '',
     };
 
-    const { data } = await supabase
-      .from('jugadores')
-      .update(updatedData)
-      .eq('id', selectedPlayer.id)
-      .select();
-
+    const { data } = await supabase.from('jugadores').update(updatedData).eq('id', selectedPlayer.id).select();
     if (data) {
       setPlayers(players.map((p) => (p.id === selectedPlayer.id ? data[0] : p)));
-      setSelectedPlayer(data[0]);
-      setShowEditPlayer(false);
+      setSelectedPlayer(data[0]); setShowEditPlayer(false);
     }
   };
 
   const handleAddInjury = async (e) => {
     e.preventDefault();
     let medName = '';
-
     if (newInjuryForm.medId && newInjuryForm.medQty > 0) {
       const itemToUse = categoryMeds.find((i) => i.id === Number(newInjuryForm.medId));
       if (itemToUse) {
@@ -167,33 +154,36 @@ export default function Roster({ user, categoryFilter }) {
     }
 
     const fechaHoy = new Date().toLocaleDateString('es-ES');
-    const lesionParaGuardar = {
-      ...newInjuryForm,
-      date: fechaHoy,
-      medName,
-      medQty: newInjuryForm.medQty,
-      interconsulta: newInjuryForm.interconsulta,
-    };
-
+    const lesionParaGuardar = { ...newInjuryForm, date: fechaHoy, medName, medQty: newInjuryForm.medQty, interconsulta: newInjuryForm.interconsulta };
     const currentHistory = selectedPlayer.history || [];
     const updatedHistory = [...currentHistory, lesionParaGuardar];
     const newStatus = Number(newInjuryForm.timeLoss) > 0 ? 'Baja' : 'Apto';
 
-    const { data } = await supabase
-      .from('jugadores')
-      .update({ history: updatedHistory, status: newStatus })
-      .eq('id', selectedPlayer.id)
-      .select();
-
+    const { data } = await supabase.from('jugadores').update({ history: updatedHistory, status: newStatus }).eq('id', selectedPlayer.id).select();
     if (data) {
       setPlayers(players.map((p) => (p.id === selectedPlayer.id ? data[0] : p)));
       setSelectedPlayer(data[0]); 
     }
-
     setShowNewInjury(false);
-    setNewInjuryForm({
-      date: '', diagnosis: '', area: '', historyText: '', treatment: '', medId: '', medQty: '', timeLoss: '0', context: 'Entrenamiento', laterality: 'N/A', relapse: false, interconsulta: false,
-    });
+    setNewInjuryForm({ date: '', diagnosis: '', area: '', historyText: '', treatment: '', medId: '', medQty: '', timeLoss: '0', context: 'Entrenamiento', laterality: 'N/A', relapse: false, interconsulta: false });
+  };
+
+  // --- EDITAR LESIÓN EN LA NUBE ---
+  const handleUpdateInjury = async (e) => {
+    e.preventDefault();
+    let updatedHistory = [...(selectedPlayer.history || [])];
+    updatedHistory[editingInjuryIndex] = editInjuryForm;
+    
+    // Recalcular estado (opcional, por si le quitamos o ponemos time loss)
+    const activeInjuries = updatedHistory.filter(h => Number(h.timeLoss) > 0);
+    const newStatus = activeInjuries.length > 0 ? 'Baja' : 'Apto';
+
+    const { data } = await supabase.from('jugadores').update({ history: updatedHistory, status: newStatus }).eq('id', selectedPlayer.id).select();
+    if (data) {
+      setPlayers(players.map((p) => (p.id === selectedPlayer.id ? data[0] : p)));
+      setSelectedPlayer(data[0]);
+    }
+    setShowEditInjury(false);
   };
 
   const handleAddEvolution = async (e) => {
@@ -221,6 +211,7 @@ export default function Roster({ user, categoryFilter }) {
   };
 
   const generarPDF = (tipo, data) => {
+    // ... Todo el generador de PDF se mantiene idéntico ...
     const ventana = window.open('', '_blank');
     let contenido = '';
 
@@ -293,13 +284,13 @@ export default function Roster({ user, categoryFilter }) {
     ventana.document.close();
   };
 
-  const startDictation = () => {
+  const startDictation = (setFormFunc) => {
     if ('webkitSpeechRecognition' in window) {
       const recognition = new window.webkitSpeechRecognition();
       recognition.lang = 'es-ES';
       setIsRecording(true);
       recognition.onresult = (e) => {
-        setNewInjuryForm((prev) => ({
+        setFormFunc((prev) => ({
           ...prev,
           historyText: prev.historyText ? `${prev.historyText} ${e.results[0][0].transcript}` : e.results[0][0].transcript,
         }));
@@ -309,9 +300,9 @@ export default function Roster({ user, categoryFilter }) {
     } else alert('Dictado por voz requiere Google Chrome.');
   };
 
-  const handleZonaChange = (e) => {
+  const handleZonaChange = (e, formState, setFormFunc) => {
     const text = e.target.value;
-    setNewInjuryForm({ ...newInjuryForm, area: text });
+    setFormFunc({ ...formState, area: text });
     if (text.length > 0)
       setFilteredZonas(ZONAS_ANATOMICAS.filter((z) => z.toLowerCase().includes(text.toLowerCase())));
     else setFilteredZonas([]);
@@ -337,10 +328,7 @@ export default function Roster({ user, categoryFilter }) {
           </button>
           {(user.role === 'DIRECTOR' || user.role === 'FISIO') && (
             <button 
-              onClick={() => {
-                setEditPlayerForm(selectedPlayer);
-                setShowEditPlayer(true);
-              }} 
+              onClick={() => { setEditPlayerForm(selectedPlayer); setShowEditPlayer(true); }} 
               className="text-gray-500 hover:text-blue-600 font-bold flex items-center gap-1 text-sm bg-gray-100 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition"
             >
               <Edit size={16} /> Editar Perfil
@@ -349,19 +337,29 @@ export default function Roster({ user, categoryFilter }) {
         </div>
         
         <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 border border-gray-200">
-          <div className="flex justify-between items-start">
-            <div>
-              <h2 className="text-3xl font-extrabold text-[#000080]">
-                <span className="text-gray-400 mr-2">#{selectedPlayer.dorsal || 'N/A'}</span>{selectedPlayer.name}
-              </h2>
-              <p className="text-gray-500 mb-2">{selectedPlayer.category} | {selectedPlayer.position}</p>
+          <div className="flex flex-col md:flex-row justify-between items-start gap-4">
+            <div className="flex items-center gap-4">
+              {/* --- FOTO DE PERFIL --- */}
+              <div className="w-20 h-20 md:w-24 md:h-24 bg-gray-100 border border-gray-200 rounded-full overflow-hidden flex-shrink-0 shadow-sm flex items-center justify-center">
+                {selectedPlayer.photo_url ? (
+                  <img src={selectedPlayer.photo_url} alt={selectedPlayer.name} className="w-full h-full object-cover" />
+                ) : (
+                  <User size={40} className="text-gray-300" />
+                )}
+              </div>
+              <div>
+                <h2 className="text-3xl font-extrabold text-[#000080]">
+                  <span className="text-gray-400 mr-2">#{selectedPlayer.dorsal || 'N/A'}</span>{selectedPlayer.name}
+                </h2>
+                <p className="text-gray-500 mb-2">{selectedPlayer.category} | {selectedPlayer.position}</p>
+                <span className={`px-4 py-1.5 rounded-full font-bold shadow-sm text-sm ${selectedPlayer.status === 'Apto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  {selectedPlayer.status}
+                </span>
+              </div>
             </div>
-            <span className={`px-4 py-2 rounded-full font-bold shadow-sm ${selectedPlayer.status === 'Apto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              {selectedPlayer.status}
-            </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6 mb-6">
             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 relative group">
               <p className="text-xs text-blue-600 font-bold uppercase mb-1">Peso Actual</p>
               <p className="font-bold text-gray-800 text-2xl mb-2">{selectedPlayer.weight || '-'} kg</p>
@@ -397,9 +395,9 @@ export default function Roster({ user, categoryFilter }) {
             </div>
           </div>
 
-          {user.role === 'PF' ? (
+          {(user.role === 'PF' || user.role === 'CT') ? (
             <div className="p-4 bg-red-50 text-red-800 rounded-xl flex items-center gap-3">
-              <ShieldAlert size={24} /> <p><strong>Acceso Restringido:</strong> El PF no tiene acceso clínico.</p>
+              <ShieldAlert size={24} /> <p><strong>Acceso Restringido:</strong> Perfil clínico privado.</p>
             </div>
           ) : (
             <div className="flex flex-wrap gap-3">
@@ -413,7 +411,7 @@ export default function Roster({ user, categoryFilter }) {
           )}
         </div>
 
-        {user.role !== 'PF' && (
+        {user.role !== 'PF' && user.role !== 'CT' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
               <h3 className="text-xl font-bold text-[#000080] mb-4 border-b pb-2">Historial Clínico de Lesiones</h3>
@@ -423,9 +421,15 @@ export default function Roster({ user, categoryFilter }) {
                 <div className="space-y-4">
                   {pHist.map((lesion, i) => (
                     <div key={i} className={`border-l-4 p-4 rounded-r-lg relative ${lesion.interconsulta ? 'border-yellow-500 bg-yellow-50' : 'border-red-500 bg-red-50'}`}>
-                      <button onClick={() => generarPDF('lesion', lesion)} className="absolute top-4 right-4 text-red-700 hover:bg-red-100 p-2 rounded-lg flex items-center gap-1 text-xs font-bold transition" title="Descargar / Enviar">
-                        <Download size={14} /> PDF
-                      </button>
+                      <div className="absolute top-4 right-4 flex gap-2">
+                        {/* --- BOTÓN PARA EDITAR LESIÓN --- */}
+                        <button onClick={() => { setEditInjuryForm(lesion); setEditingInjuryIndex(i); setShowEditInjury(true); }} className="text-blue-700 hover:bg-blue-100 p-2 rounded-lg flex items-center gap-1 text-xs font-bold transition" title="Editar Historial">
+                          <Edit2 size={14} /> Editar
+                        </button>
+                        <button onClick={() => generarPDF('lesion', lesion)} className="text-red-700 hover:bg-red-100 p-2 rounded-lg flex items-center gap-1 text-xs font-bold transition" title="Descargar / Enviar">
+                          <Download size={14} /> PDF
+                        </button>
+                      </div>
                       <div className="text-xs text-red-500 font-bold flex items-center flex-wrap gap-2">
                         <span>{lesion.date} • {lesion.context} {lesion.relapse ? '(Recaída)' : ''}</span>
                         {lesion.interconsulta && (
@@ -442,9 +446,6 @@ export default function Roster({ user, categoryFilter }) {
                           <div className="mt-2 pt-2 border-t border-red-100">
                             <p className="text-xs text-blue-600 font-bold uppercase mb-1">Abordaje / Tratamiento Realizado:</p>
                             <p className="text-sm text-gray-800 font-medium">{lesion.treatment}</p>
-                            {lesion.medName && (
-                              <p className="text-xs text-yellow-700 font-bold mt-1">Insumo: {lesion.medQty}x {lesion.medName}</p>
-                            )}
                           </div>
                         )}
                       </div>
@@ -457,19 +458,19 @@ export default function Roster({ user, categoryFilter }) {
 
             <div className="bg-white p-6 rounded-2xl shadow-sm border relative">
               <div className="flex justify-between items-center mb-4 border-b pb-2">
-                <h3 className="text-xl font-bold text-[#000080]">Seguimiento / Evolución Médica</h3>
+                <h3 className="text-xl font-bold text-[#000080]">Seguimiento Méd. / Notas</h3>
                 <button onClick={() => setShowEvolution(true)} className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded-lg text-sm font-bold flex items-center gap-1">
-                  <Plus size={16} /> Añadir Nota
+                  <Plus size={16} /> Añadir
                 </button>
               </div>
               {pEvo.length === 0 ? (
                 <p className="text-gray-500 text-sm">No hay notas clínicas.</p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 max-h-[600px] overflow-y-auto">
                   {pEvo.map((evo, i) => (
                     <div key={i} className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
                       <p className="text-xs text-blue-500 font-bold mb-1">{evo.date}</p>
-                      <p className="text-sm text-gray-700">{evo.note}</p>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{evo.note}</p>
                       {evo.file && (
                         <div className="mt-3 pt-2 border-t border-blue-100 flex items-center gap-2">
                           <Paperclip size={14} className="text-blue-500" />
@@ -484,63 +485,32 @@ export default function Roster({ user, categoryFilter }) {
           </div>
         )}
 
-        {showEditPlayer && (
+        {/* MODAL: EDITAR LESIÓN (LÁPIZ) */}
+        {showEditInjury && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl relative">
-              <button onClick={() => setShowEditPlayer(false)} className="absolute top-4 right-4 text-gray-400"><X /></button>
-              <h3 className="text-xl font-bold text-gray-700 mb-4 flex items-center gap-2"><Edit /> Editar Perfil de {editPlayerForm.name}</h3>
-              <form onSubmit={handleUpdatePlayer} className="space-y-3">
-                <div className="grid grid-cols-4 gap-3">
-                  <div className="col-span-3">
-                    <label className="text-xs font-bold">Nombre Completo</label>
-                    {/* El nombre SÍ sigue siendo obligatorio para identificarlo */}
-                    <input type="text" required className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.name || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, name: e.target.value })} />
+            <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-2xl relative overflow-y-auto max-h-[90vh]">
+              <button onClick={() => setShowEditInjury(false)} className="absolute top-4 right-4 text-gray-400"><X /></button>
+              <h3 className="text-xl font-bold text-blue-700 mb-4 flex items-center gap-2"><Edit2 /> Editar Registro de Lesión</h3>
+              <form onSubmit={handleUpdateInjury} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-gray-600">Diagnóstico Exacto</label>
+                    <input type="text" required className="w-full border p-2 rounded-xl mt-1 text-sm" value={editInjuryForm.diagnosis} onChange={(e) => setEditInjuryForm({ ...editInjuryForm, diagnosis: e.target.value })} />
                   </div>
                   <div>
-                    <label className="text-xs font-bold">Dorsal</label>
-                    <input type="number" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.dorsal || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, dorsal: e.target.value })} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold">Teléfono (WhatsApp)</label>
-                    <input type="tel" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.phone || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, phone: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold">Categoría</label>
-                    <select className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.category || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, category: e.target.value })}>
-                      {user.role === 'DIRECTOR' ? (
-                        <><option value="Mayor">Mayor</option><option value="Especial">Especial</option><option value="Cat A">Cat A</option><option value="Cat B">Cat B</option><option value="Sub-15">Sub-15</option><option value="Sub-13">Sub-13</option></>
-                      ) : (
-                        user.categories.map((c) => c !== 'ALL' && (<option key={c} value={c}>{c}</option>))
-                      )}
-                    </select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-xs font-bold">Posición</label>
-                    <select className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.position || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, position: e.target.value })}>
-                      <option value="Portero">Portero</option><option value="Defensa">Defensa</option><option value="Mediocampista">Medio</option><option value="Delantero">Delantero</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold">Peso (kg)</label>
-                    <input type="number" step="0.1" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.weight || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, weight: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold">Estatura (m)</label>
-                    <input type="number" step="0.01" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.height || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, height: e.target.value })} />
+                    <label className="text-xs font-bold text-gray-600">Time-Loss (Días)</label>
+                    <input type="number" required className="w-full border p-2 rounded-xl mt-1 text-sm" value={editInjuryForm.timeLoss} onChange={(e) => setEditInjuryForm({ ...editInjuryForm, timeLoss: e.target.value })} />
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs font-bold">Antecedentes Clínicos</label>
-                  <textarea rows="2" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.background || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, background: e.target.value })}></textarea>
+                  <label className="text-xs font-bold text-gray-600">Historia / Mecanismo</label>
+                  <textarea rows="3" className="w-full border p-2 rounded-xl mt-1 text-sm" value={editInjuryForm.historyText} onChange={(e) => setEditInjuryForm({ ...editInjuryForm, historyText: e.target.value })}></textarea>
                 </div>
-                <div className="flex gap-2 pt-2">
-                  <button type="button" onClick={() => setShowEditPlayer(false)} className="flex-1 bg-gray-200 py-3 rounded-xl font-bold">Cancelar</button>
-                  <button type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md">Guardar Cambios</button>
+                <div>
+                  <label className="text-xs font-bold text-gray-600">Tratamiento / Abordaje</label>
+                  <textarea rows="2" className="w-full border p-2 rounded-xl mt-1 text-sm" value={editInjuryForm.treatment} onChange={(e) => setEditInjuryForm({ ...editInjuryForm, treatment: e.target.value })}></textarea>
                 </div>
+                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md">Guardar Cambios Clínicos</button>
               </form>
             </div>
           </div>
@@ -567,10 +537,6 @@ export default function Roster({ user, categoryFilter }) {
               <h3 className="font-bold text-xl mb-4 text-[#000080] flex items-center gap-2"><FileText /> Nota de Evolución</h3>
               <form onSubmit={handleAddEvolution}>
                 <textarea required rows="4" className="w-full border p-3 rounded-xl mb-3 text-sm" value={newEvolution} onChange={(e) => setNewEvolution(e.target.value)}></textarea>
-                <div className="mb-4">
-                  <label className="block text-xs font-bold text-gray-600 mb-1">Adjuntar Archivo</label>
-                  <input type="file" className="text-sm w-full file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-50 file:text-blue-700" onChange={(e) => setAttachedFile(e.target.files[0]?.name || '')} />
-                </div>
                 <div className="flex gap-2">
                   <button type="button" onClick={() => setShowEvolution(false)} className="flex-1 bg-gray-200 py-3 rounded-xl font-bold">Cancelar</button>
                   <button type="submit" className="flex-1 bg-[#000080] text-white py-3 rounded-xl font-bold">Guardar Nota</button>
@@ -580,6 +546,7 @@ export default function Roster({ user, categoryFilter }) {
           </div>
         )}
 
+        {/* ... Modal de Exámenes y Registrar Lesión ... */}
         {showExams && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 w-full max-w-xl shadow-2xl relative">
@@ -642,7 +609,7 @@ export default function Roster({ user, categoryFilter }) {
                   <div className="grid grid-cols-3 gap-4">
                     <div className="col-span-2 relative">
                       <label className="text-xs font-bold text-gray-600">Zona Anatómica</label>
-                      <input type="text" required placeholder="Ej. Rodilla..." className="w-full border p-2 rounded-xl mt-1 text-sm" value={newInjuryForm.area} onChange={handleZonaChange} />
+                      <input type="text" required placeholder="Ej. Rodilla..." className="w-full border p-2 rounded-xl mt-1 text-sm" value={newInjuryForm.area} onChange={(e) => handleZonaChange(e, newInjuryForm, setNewInjuryForm)} />
                       {filteredZonas.length > 0 && (
                         <ul className="absolute z-10 w-full bg-white border mt-1 rounded-xl shadow-xl max-h-32 overflow-y-auto">
                           {filteredZonas.map((z) => (
@@ -665,7 +632,7 @@ export default function Roster({ user, categoryFilter }) {
                   <div>
                     <label className="flex justify-between items-end text-xs font-bold text-gray-600 mb-1">
                       <span>Mecanismo / Historia</span>
-                      <button type="button" onClick={startDictation} className={`p-2 rounded-full ${isRecording ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-white text-gray-600 shadow'}`}><Mic size={14} /></button>
+                      <button type="button" onClick={() => startDictation(setNewInjuryForm)} className={`p-2 rounded-full ${isRecording ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-white text-gray-600 shadow'}`}><Mic size={14} /></button>
                     </label>
                     <textarea required rows="2" className="w-full border p-2 rounded-xl text-sm" value={newInjuryForm.historyText} onChange={(e) => setNewInjuryForm({ ...newInjuryForm, historyText: e.target.value })}></textarea>
                   </div>
@@ -705,9 +672,6 @@ export default function Roster({ user, categoryFilter }) {
                       />
                       <Send size={18} /> Solicitar Interconsulta a Dr. Angel
                     </label>
-                    <p className="text-xs text-yellow-600 mt-1 ml-8 leading-tight">
-                      Al guardar, la lesión quedará marcada con una etiqueta amarilla de interconsulta en el historial.
-                    </p>
                   </div>
                 )}
 
@@ -718,6 +682,81 @@ export default function Roster({ user, categoryFilter }) {
             </div>
           </div>
         )}
+
+        {/* MODAL: EDITAR JUGADOR (CON FOTO) */}
+        {showEditPlayer && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl relative overflow-y-auto max-h-[90vh]">
+              <button onClick={() => setShowEditPlayer(false)} className="absolute top-4 right-4 text-gray-400"><X /></button>
+              <h3 className="text-xl font-bold text-gray-700 mb-4 flex items-center gap-2"><Edit /> Editar Perfil de {editPlayerForm.name}</h3>
+              
+              <div className="mb-4 flex items-center gap-4 bg-gray-50 p-3 rounded-xl border">
+                <div className="w-16 h-16 bg-gray-200 rounded-full overflow-hidden flex items-center justify-center border-2 border-white shadow-sm">
+                  {editPlayerForm.photo_url ? <img src={editPlayerForm.photo_url} alt="Perfil" className="w-full h-full object-cover"/> : <Camera size={24} className="text-gray-400"/>}
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-gray-600 block mb-1">Cambiar Fotografía</label>
+                  <input type="file" accept="image/*" onChange={(e) => handlePhotoUpload(e, setEditPlayerForm)} className="text-xs file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700" disabled={isUploading} />
+                  {isUploading && <p className="text-xs text-blue-500 font-bold mt-1 animate-pulse">Subiendo foto...</p>}
+                </div>
+              </div>
+
+              <form onSubmit={handleUpdatePlayer} className="space-y-3">
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="col-span-3">
+                    <label className="text-xs font-bold">Nombre Completo</label>
+                    <input type="text" required className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.name || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, name: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold">Dorsal</label>
+                    <input type="number" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.dorsal || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, dorsal: e.target.value })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold">Teléfono (WhatsApp)</label>
+                    <input type="tel" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.phone || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, phone: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold">Categoría</label>
+                    <select className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.category || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, category: e.target.value })}>
+                      {user.role === 'DIRECTOR' ? (
+                        <><option value="Mayor">Mayor</option><option value="Especial">Especial</option><option value="Cat A">Cat A</option><option value="Cat B">Cat B</option><option value="Sub-15">Sub-15</option><option value="Sub-13">Sub-13</option></>
+                      ) : (
+                        user.categories.map((c) => c !== 'ALL' && (<option key={c} value={c}>{c}</option>))
+                      )}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-bold">Posición</label>
+                    <select className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.position || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, position: e.target.value })}>
+                      <option value="Portero">Portero</option><option value="Defensa">Defensa</option><option value="Mediocampista">Medio</option><option value="Delantero">Delantero</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold">Peso (kg)</label>
+                    <input type="number" step="0.1" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.weight || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, weight: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold">Estatura (m)</label>
+                    <input type="number" step="0.01" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.height || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, height: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-bold">Antecedentes Clínicos</label>
+                  <textarea rows="2" className="w-full border p-2 rounded-lg mt-1 text-sm" value={editPlayerForm.background || ''} onChange={(e) => setEditPlayerForm({ ...editPlayerForm, background: e.target.value })}></textarea>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button type="button" onClick={() => setShowEditPlayer(false)} className="flex-1 bg-gray-200 py-3 rounded-xl font-bold">Cancelar</button>
+                  <button type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md">Guardar Cambios</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </div>
     );
   }
@@ -749,26 +788,44 @@ export default function Roster({ user, categoryFilter }) {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {visiblePlayers.map((p) => (
-            <div key={p.id} onClick={() => setSelectedPlayer(p)} className="bg-white p-5 rounded-2xl shadow-sm border cursor-pointer hover:border-blue-400 hover:shadow-md transition group">
-              <div className="flex justify-between items-start mb-1">
-                <h3 className="font-bold text-lg text-gray-800 group-hover:text-[#000080]">
-                  <span className="text-gray-400 text-sm mr-1">#{p.dorsal || '-'}</span>{p.name}
-                </h3>
-                <span className={`px-2 py-1 text-xs rounded-full font-bold shadow-sm ${p.status === 'Apto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                  {p.status}
-                </span>
+            <div key={p.id} onClick={() => setSelectedPlayer(p)} className="bg-white p-4 rounded-2xl shadow-sm border cursor-pointer hover:border-blue-400 hover:shadow-md transition group flex gap-3 items-center">
+              <div className="w-12 h-12 bg-gray-100 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center">
+                {p.photo_url ? <img src={p.photo_url} alt={p.name} className="w-full h-full object-cover"/> : <User size={20} className="text-gray-400"/>}
               </div>
-              <p className="text-sm text-gray-500 font-medium">{p.category} • {p.position}</p>
+              <div className="flex-1">
+                <div className="flex justify-between items-start mb-0.5">
+                  <h3 className="font-bold text-sm text-gray-800 group-hover:text-[#000080] truncate w-32">
+                    {p.name}
+                  </h3>
+                  <span className={`px-2 py-0.5 text-[10px] rounded-full font-bold shadow-sm ${p.status === 'Apto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    {p.status}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 font-medium">{p.category} • {p.position} {p.dorsal ? `• #${p.dorsal}` : ''}</p>
+              </div>
             </div>
           ))}
         </div>
       )}
 
+      {/* MODAL: NUEVO JUGADOR (CON FOTO) */}
       {showNewPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl relative">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl relative overflow-y-auto max-h-[90vh]">
             <button onClick={() => setShowNewPlayer(false)} className="absolute top-4 right-4 text-gray-400"><X /></button>
             <h3 className="text-xl font-bold text-[#000080] mb-4 flex items-center gap-2"><User /> Nuevo Jugador</h3>
+            
+            <div className="mb-4 flex items-center gap-4 bg-gray-50 p-3 rounded-xl border">
+              <div className="w-16 h-16 bg-gray-200 rounded-full overflow-hidden flex items-center justify-center border-2 border-white shadow-sm">
+                {newPlayerForm.photo_url ? <img src={newPlayerForm.photo_url} alt="Perfil" className="w-full h-full object-cover"/> : <Camera size={24} className="text-gray-400"/>}
+              </div>
+              <div className="flex-1">
+                <label className="text-xs font-bold text-gray-600 block mb-1">Fotografía del Jugador</label>
+                <input type="file" accept="image/*" onChange={(e) => handlePhotoUpload(e, setNewPlayerForm)} className="text-xs file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700" disabled={isUploading}/>
+                {isUploading && <p className="text-xs text-blue-500 font-bold mt-1 animate-pulse">Subiendo foto...</p>}
+              </div>
+            </div>
+
             <form onSubmit={handleAddPlayer} className="space-y-3">
               <div className="grid grid-cols-4 gap-3">
                 <div className="col-span-3">
@@ -816,7 +873,7 @@ export default function Roster({ user, categoryFilter }) {
                 <label className="text-xs font-bold">Antecedentes Clínicos</label>
                 <textarea rows="2" className="w-full border p-2 rounded-lg mt-1 text-sm" value={newPlayerForm.background} onChange={(e) => setNewPlayerForm({ ...newPlayerForm, background: e.target.value })}></textarea>
               </div>
-              <button type="submit" className="w-full bg-[#000080] text-white font-bold py-3 rounded-xl mt-2 shadow-md">Guardar en Nube</button>
+              <button type="submit" className="w-full bg-[#000080] text-white font-bold py-3 rounded-xl mt-2 shadow-md">Guardar Jugador en Nube</button>
             </form>
           </div>
         </div>
