@@ -1,28 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import {
-  CalendarDays,
-  Save,
-  FileText,
-  CheckCircle,
-  Edit3,
-  User,
-  Activity,
-  Snowflake,
-  Hand
+  CalendarDays, Save, FileText, CheckCircle, Edit3, User, Activity, Snowflake, Hand
 } from 'lucide-react';
 import { supabase } from './supabase'; 
 
 export default function Matriz({ user }) {
   const allCats = ['Mayor', 'Especial', 'Cat A', 'Cat B', 'Sub-15', 'Sub-13'];
   const availableCategories = (user.role === 'DIRECTOR' || user.categories?.includes('ALL')) 
-    ? allCats 
-    : user.categories;
+    ? allCats : user.categories;
 
   const [activeCategory, setActiveCategory] = useState(availableCategories[0] || 'Mayor');
   const [players, setPlayers] = useState([]);
   const [contextoDia, setContextoDia] = useState('Entrenamiento');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [editingStatus, setEditingStatus] = useState(null);
+  
+  // NUEVO: Estado para mostrar el reporte dentro de la app sin ventanas emergentes
+  const [showReport, setShowReport] = useState(false);
 
   const fetchPlayers = async () => {
     const { data } = await supabase.from('jugadores').select('*').order('name', { ascending: true });
@@ -52,12 +46,17 @@ export default function Matriz({ user }) {
 
   useEffect(() => { fetchPlayers(); }, [user, activeCategory]);
 
+  // Actualizan el estado local mientras tecleas
   const handleMedCommentChange = (id, text) => {
     setPlayers(players.map((p) => (p.id === id ? { ...p, med_comment: text } : p)));
   };
-  
   const handleFisioCommentChange = (id, text) => {
     setPlayers(players.map((p) => (p.id === id ? { ...p, fisio_comment: text } : p)));
+  };
+
+  // NUEVO AUTOGUARDADO: Guarda en la nube cuando dejas de escribir (pierde el foco)
+  const handleCommentBlur = async (id, field, value) => {
+    await supabase.from('jugadores').update({ [field]: value }).eq('id', id);
   };
 
   const handleStatusOverride = async (id, newStatus) => {
@@ -70,7 +69,7 @@ export default function Matriz({ user }) {
     if (user.username !== 'lft.mayor2') return;
     const newValue = !currentValue;
     setPlayers(players.map((p) => (p.id === id ? { ...p, [field]: newValue } : p)));
-    await supabase.from('jugadores').update({ [field]: newValue }).eq('id', id);
+    await supabase.from('jugadores').update({ [field]: newValue }).eq('id', id); // Guarda instantáneamente
   };
 
   const handleSave = async () => {
@@ -102,152 +101,137 @@ export default function Matriz({ user }) {
     }
 
     setSavedSuccess(true);
-    fetchPlayers();
+    fetchPlayers(); // Refresca limpiando pantalla
     setTimeout(() => setSavedSuccess(false), 3000);
   };
 
-  const generarParteMedico = () => {
-    const ventana = window.open('', '_blank');
-    
-    // Filtramos y separamos por grupos exactos
+  // VISTA PREVIA DEL REPORTE (Nativo, sin ventanas emergentes)
+  if (showReport) {
     const bajas = players.filter(p => p.status === 'Baja' || p.status === 'Diferenciado');
     const aptosConNotas = players.filter(p => p.status === 'Apto' && (p.med_comment || p.fisio_comment));
     const enCrio = players.filter(p => p.crio_hoy);
     const enMasaje = players.filter(p => p.masaje_hoy);
-
     const todosAptos = bajas.length === 0 && aptosConNotas.length === 0 && enCrio.length === 0 && enMasaje.length === 0;
 
-    let reporteHTML = '';
-
-    if (todosAptos) {
-      reporteHTML = `
-        <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 20px; border-radius: 8px; text-align: center; margin: 30px 0;">
-          <h3 style="margin: 0; font-size: 18px;">✅ DÍA SIN INCIDENTES MÉDICOS</h3>
-          <p style="margin-top: 10px; font-size: 15px;">Todo el plantel se encuentra Apto y a total disposición, sin novedades médicas que reportar.</p>
-        </div>
-      `;
-    } else {
-      
-      // 1. SECCIÓN DE BAJAS Y DIFERENCIADOS
-      if (bajas.length > 0) {
-        reporteHTML += `<h3 style="color: #b91c1c; border-bottom: 2px solid #b91c1c; padding-bottom: 5px; text-transform: uppercase;">🔴 Jugadores No Disponibles o Diferenciados</h3>`;
-        reporteHTML += bajas.map(p => {
-          const estadoDesc = p.status === 'Baja' ? 'Baja Médica (No Disponible)' : 'Trabajo Diferenciado';
-          const lastInjury = p.history && p.history.length > 0 ? p.history[p.history.length - 1] : null;
-          const esCronico = lastInjury && Number(lastInjury.timeLoss) > 10;
-
-          if (esCronico && p.status === 'Baja') {
-            return `
-              <div style="margin-bottom: 15px; padding: 10px; background-color: #f8fafc; border-left: 4px solid #94a3b8;">
-                <p style="margin: 0; line-height: 1.5; color: #475569;">
-                  <strong>${p.name} (${p.position}) - Baja Médica Prolongada.</strong><br/>
-                  Continúa en su fase de rehabilitación correspondiente, sin fecha de retorno a corto plazo.
-                </p>
-              </div>`;
-          }
-
-          const comments = [];
-          if (p.med_comment) comments.push(`<strong>Médico:</strong> ${p.med_comment}`);
-          if (p.fisio_comment) comments.push(`<strong>Fisio:</strong> ${p.fisio_comment}`);
-          const currentManejo = comments.length > 0 ? comments.join(' | ') : 'Manejo médico en curso';
-
-          return `
-            <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #ccc;">
-              <p style="margin: 0 0 5px 0; line-height: 1.6;">
-                <strong>${p.name}</strong> (${p.position}) - <strong>${estadoDesc}</strong>.<br/> 
-                Abordaje / Observación: <em>${currentManejo}</em>
-              </p>
-            </div>`;
-        }).join('');
-      }
-
-      // 2. SECCIÓN DE JUGADORES APTOS PERO CON COMENTARIO
-      if (aptosConNotas.length > 0) {
-        reporteHTML += `<h3 style="color: #15803d; border-bottom: 2px solid #15803d; padding-bottom: 5px; margin-top: 30px; text-transform: uppercase;">🟢 Jugadores Disponibles (Con Observaciones)</h3>`;
-        reporteHTML += aptosConNotas.map(p => {
-          const comments = [];
-          if (p.med_comment) comments.push(`<strong>Médico:</strong> ${p.med_comment}`);
-          if (p.fisio_comment) comments.push(`<strong>Fisio:</strong> ${p.fisio_comment}`);
+    return (
+      <div className="fixed inset-0 bg-white z-50 overflow-y-auto print:absolute print:inset-0">
+        <div className="max-w-3xl mx-auto p-8 print:p-0 print:m-0">
           
-          return `
-            <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #ccc;">
-              <p style="margin: 0 0 5px 0; line-height: 1.6;">
-                <strong>${p.name}</strong> (${p.position}) - <strong>Disponible</strong>.<br/> 
-                <em>${comments.join(' | ')}</em>
-              </p>
-            </div>`;
-        }).join('');
-      }
+          {/* BARRA DE HERRAMIENTAS (No se imprime) */}
+          <div className="flex flex-col md:flex-row justify-between items-center mb-8 pb-4 border-b print:hidden gap-4 bg-gray-50 p-4 rounded-xl">
+            <button onClick={() => setShowReport(false)} className="text-gray-600 font-bold hover:text-red-600 w-full md:w-auto text-center">
+              ← Regresar a la Matriz
+            </button>
+            <p className="text-xs text-gray-500 text-center">Para enviar por WhatsApp, guarda como PDF.</p>
+            <button onClick={() => window.print()} className="bg-[#000080] text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg w-full md:w-auto">
+              <FileText size={18} /> Imprimir / Guardar PDF
+            </button>
+          </div>
 
-      // 3. SECCIÓN DE LISTAS DE PROCEDIMIENTOS (CRIO Y MASAJE)
-      if (enCrio.length > 0 || enMasaje.length > 0) {
-        reporteHTML += `<h3 style="color: #000080; border-bottom: 2px solid #000080; padding-bottom: 5px; margin-top: 30px; text-transform: uppercase;">⚡ Procedimientos de Prevención y Recuperación</h3>`;
-        
-        reporteHTML += `<div style="display: flex; gap: 20px; margin-top: 15px;">`;
-        
-        // Tabla Crio
-        reporteHTML += `<div style="flex: 1; background: #f0f9ff; padding: 15px; border-radius: 8px; border: 1px solid #bae6fd;">`;
-        reporteHTML += `<h4 style="margin-top: 0; margin-bottom: 10px; color: #0369a1;">❄️ Lista de Crioterapia</h4>`;
-        reporteHTML += `<ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #1e3a8a;">`;
-        if (enCrio.length > 0) {
-          enCrio.forEach(p => { reporteHTML += `<li><strong>${p.name}</strong></li>`; });
-        } else {
-          reporteHTML += `<li>Ninguno reportado</li>`;
-        }
-        reporteHTML += `</ul></div>`;
+          {/* CUERPO DEL DOCUMENTO */}
+          <div className="font-sans text-gray-900">
+            <div className="border-b-4 border-[#000080] pb-4 mb-6">
+              <h1 className="text-3xl font-black text-[#000080] uppercase tracking-wide m-0">Comunicaciones F.C.</h1>
+              <p className="text-sm text-gray-500 font-bold uppercase tracking-widest mt-1">Departamento Médico - Categoría: {activeCategory}</p>
+            </div>
+            
+            <p className="text-right text-gray-500 text-sm font-bold mb-6">Fecha: {new Date().toLocaleDateString('es-ES')}</p>
+            <p className="font-bold text-lg mb-2">Querido Cuerpo Técnico,</p>
+            <p className="mb-6 leading-relaxed text-gray-700">A continuación, se detalla el reporte de disponibilidad médica y preventivo correspondiente a la jornada de <strong>{contextoDia}</strong>:</p>
 
-        // Tabla Masaje
-        reporteHTML += `<div style="flex: 1; background: #f0fdfa; padding: 15px; border-radius: 8px; border: 1px solid #99f6e4;">`;
-        reporteHTML += `<h4 style="margin-top: 0; margin-bottom: 10px; color: #0f766e;">💆 Lista de Masaje / Descarga</h4>`;
-        reporteHTML += `<ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #134e4a;">`;
-        if (enMasaje.length > 0) {
-          enMasaje.forEach(p => { reporteHTML += `<li><strong>${p.name}</strong></li>`; });
-        } else {
-          reporteHTML += `<li>Ninguno reportado</li>`;
-        }
-        reporteHTML += `</ul></div>`;
+            {todosAptos ? (
+              <div className="bg-green-50 border border-green-200 text-green-800 p-6 rounded-xl text-center my-8">
+                <h3 className="font-bold text-lg">✅ DÍA SIN INCIDENTES MÉDICOS</h3>
+                <p className="mt-2">Todo el plantel se encuentra Apto y a total disposición, sin novedades médicas que reportar.</p>
+              </div>
+            ) : (
+              <>
+                {bajas.length > 0 && (
+                  <div className="mb-8">
+                    <h3 className="text-red-700 border-b-2 border-red-700 pb-1 mb-4 font-bold uppercase">🔴 Jugadores No Disponibles o Diferenciados</h3>
+                    {bajas.map(p => {
+                      const estadoDesc = p.status === 'Baja' ? 'Baja Médica (No Disponible)' : 'Trabajo Diferenciado';
+                      const lastInjury = p.history && p.history.length > 0 ? p.history[p.history.length - 1] : null;
+                      const esCronico = lastInjury && Number(lastInjury.timeLoss) > 10;
+                      
+                      if (esCronico && p.status === 'Baja') {
+                        return (
+                          <div key={p.id} className="mb-4 p-4 bg-gray-50 border-l-4 border-gray-400">
+                            <p className="m-0 text-gray-700"><strong>{p.name} ({p.position}) - Baja Médica Prolongada.</strong><br/>
+                            Continúa en su fase de rehabilitación correspondiente, sin fecha de retorno a corto plazo.</p>
+                          </div>
+                        );
+                      }
 
-        reporteHTML += `</div>`; // Cierre del flex
-      }
-    }
+                      const comments = [];
+                      if (p.med_comment) comments.push(`Médico: ${p.med_comment}`);
+                      if (p.fisio_comment) comments.push(`Fisio: ${p.fisio_comment}`);
+                      const currentManejo = comments.length > 0 ? comments.join(' | ') : 'Manejo médico en curso';
 
-    const baseCSS = `
-      body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #1f2937; max-width: 800px; margin: 0 auto; }
-      .header { border-bottom: 3px solid #000080; padding-bottom: 15px; margin-bottom: 30px; }
-      .title { color: #000080; font-size: 22px; font-weight: 900; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
-      .subtitle { color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-top: 5px; font-weight: bold; }
-      .footer { margin-top: 80px; text-align: center; }
-      .signature { border-top: 1px solid #1f2937; width: 250px; margin: 0 auto; padding-top: 10px; font-weight: bold; font-size: 14px; }
-      .no-print { text-align: center; margin-bottom: 20px; padding: 10px; background-color: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 14px; border-radius: 5px; }
-      @media print { .no-print { display: none; } }
-    `;
+                      return (
+                        <div key={p.id} className="mb-4 pb-4 border-b border-dashed border-gray-300">
+                          <p className="m-0 text-gray-800 text-lg">
+                            <strong>{p.name}</strong> ({p.position}) - <strong>{estadoDesc}</strong>.<br/>
+                            <span className="text-base text-gray-600">Abordaje / Observación: <em>{currentManejo}</em></span>
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
-    ventana.document.write(`
-      <html><head><title>Parte Médico - ${tituloCategoria}</title><style>${baseCSS}</style></head>
-      <body>
-        <div class="no-print"><strong>Para enviar al CT por WhatsApp:</strong> Selecciona "Guardar como PDF".</div>
-        <div class="header">
-          <h1 class="title">Comunicaciones F.C.</h1>
-          <p class="subtitle">Departamento Médico - Categoría: ${tituloCategoria}</p>
+                {aptosConNotas.length > 0 && (
+                  <div className="mb-8">
+                    <h3 className="text-green-700 border-b-2 border-green-700 pb-1 mb-4 font-bold uppercase">🟢 Jugadores Disponibles (Con Observaciones)</h3>
+                    {aptosConNotas.map(p => {
+                      const comments = [];
+                      if (p.med_comment) comments.push(`Médico: ${p.med_comment}`);
+                      if (p.fisio_comment) comments.push(`Fisio: ${p.fisio_comment}`);
+                      return (
+                        <div key={p.id} className="mb-4 pb-4 border-b border-dashed border-gray-300">
+                          <p className="m-0 text-gray-800 text-lg">
+                            <strong>{p.name}</strong> ({p.position}) - <strong>Disponible</strong>.<br/>
+                            <span className="text-base text-gray-600"><em>{comments.join(' | ')}</em></span>
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {(enCrio.length > 0 || enMasaje.length > 0) && (
+                  <div className="mb-8 mt-8 border-t-2 border-[#000080] pt-6 page-break-inside-avoid">
+                    <h3 className="text-[#000080] font-bold uppercase mb-4">⚡ Procedimientos de Prevención y Recuperación</h3>
+                    <div className="flex flex-col sm:flex-row gap-6">
+                      <div className="flex-1 bg-blue-50 p-5 rounded-xl border border-blue-100">
+                        <h4 className="text-blue-800 font-bold mb-3 text-lg">❄️ Crioterapia (Tinas)</h4>
+                        <ul className="list-disc pl-5 text-blue-900 space-y-1">
+                          {enCrio.length > 0 ? enCrio.map(p => <li key={p.id}><strong>{p.name}</strong></li>) : <li className="text-gray-400 list-none -ml-5">Ninguno reportado</li>}
+                        </ul>
+                      </div>
+                      <div className="flex-1 bg-teal-50 p-5 rounded-xl border border-teal-100">
+                        <h4 className="text-teal-800 font-bold mb-3 text-lg">💆 Masaje / Descarga</h4>
+                        <ul className="list-disc pl-5 text-teal-900 space-y-1">
+                          {enMasaje.length > 0 ? enMasaje.map(p => <li key={p.id}><strong>{p.name}</strong></li>) : <li className="text-gray-400 list-none -ml-5">Ninguno reportado</li>}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <p className="text-sm text-gray-500 italic mt-12">* Los jugadores del plantel no mencionados en este documento se encuentran 100% aptos y sin observaciones médicas.</p>
+            
+            <div className="mt-16 text-center">
+              <div className="border-t border-gray-800 w-64 mx-auto pt-2 font-bold">{user.name}</div>
+              <div className="text-sm text-gray-500 mt-1">Departamento Médico / Fisioterapia</div>
+            </div>
+          </div>
         </div>
-        
-        <p style="text-align: right; color: #6b7280; font-size: 14px;"><strong>Fecha:</strong> ${new Date().toLocaleDateString('es-ES')}</p>
-        <p style="font-size: 16px; font-weight: bold; margin-top: 30px;">Querido Cuerpo Técnico,</p>
-        <p style="font-size: 15px; line-height: 1.6; margin-bottom: 30px;">A continuación, se detalla el reporte de disponibilidad médica y preventivo correspondiente a la jornada de <strong>${contextoDia}</strong>:</p>
-
-        ${reporteHTML}
-
-        <p style="font-size: 14px; margin-top: 30px; color: #4b5563; font-style: italic;">* Los jugadores del plantel no mencionados en este documento se encuentran 100% aptos y sin observaciones médicas.</p>
-
-        <div class="footer">
-          <div class="signature">${user.name}</div>
-          <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">Departamento Médico / Fisioterapia</div>
-        </div>
-        <script>window.onload = function() { setTimeout(function() { window.print(); }, 500); }</script>
-      </body></html>
-    `);
-    ventana.document.close();
-  };
+      </div>
+    );
+  }
 
   const isCT = user.role === 'CT';
 
@@ -264,8 +248,8 @@ export default function Matriz({ user }) {
           <select className="border border-gray-300 rounded-xl p-2 text-sm font-bold text-gray-700 bg-white shadow-sm" value={contextoDia} onChange={(e) => setContextoDia(e.target.value)}>
             <option value="Entrenamiento">Entrenamiento</option><option value="Partido Oficial">Partido Oficial</option><option value="Partido Amistoso">Partido Amistoso</option><option value="Recuperación">Recuperación</option>
           </select>
-          <button onClick={generarParteMedico} className="bg-white border-2 border-[#000080] text-[#000080] hover:bg-blue-50 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm transition-all flex-shrink-0">
-            <FileText size={18} /> 1. Generar Reporte PDF
+          <button onClick={() => setShowReport(true)} className="bg-white border-2 border-[#000080] text-[#000080] hover:bg-blue-50 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm transition-all flex-shrink-0">
+            <FileText size={18} /> 1. Ver Reporte PDF
           </button>
         </div>
       </div>
@@ -273,15 +257,7 @@ export default function Matriz({ user }) {
       {availableCategories.length > 1 && (
         <div className="flex flex-wrap gap-2 mb-6 bg-gray-50 p-2 rounded-2xl border border-gray-200">
           {availableCategories.map(cat => (
-            <button 
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`px-5 py-2 rounded-xl text-sm font-bold transition-all ${
-                activeCategory === cat 
-                ? 'bg-[#000080] text-white shadow-md' 
-                : 'bg-white text-gray-600 hover:bg-blue-50 hover:text-blue-700 border border-gray-200'
-              }`}
-            >
+            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-xl text-sm font-bold transition-all ${activeCategory === cat ? 'bg-[#000080] text-white shadow-md' : 'bg-white text-gray-600 hover:bg-blue-50 hover:text-blue-700 border border-gray-200'}`}>
               {cat}
             </button>
           ))}
@@ -290,13 +266,13 @@ export default function Matriz({ user }) {
 
       {savedSuccess && (
         <div className="mb-4 bg-green-100 border border-green-300 text-green-800 px-4 py-3 rounded-xl flex items-center gap-2 font-bold shadow-sm">
-          <CheckCircle size={20} /> Datos guardados en historiales clínicos y tabla limpiada.
+          <CheckCircle size={20} /> Historiales cerrados y tabla limpiada para el día de mañana.
         </div>
       )}
 
       {players.length === 0 ? (
         <div className="bg-gray-50 p-8 text-center rounded-2xl border border-gray-200 text-gray-500 mt-4">
-          <User size={40} className="mx-auto mb-3 text-gray-300" /> No hay jugadores registrados en la categoría {activeCategory}.
+          <User size={40} className="mx-auto mb-3 text-gray-300" /> No hay jugadores registrados en {activeCategory}.
         </div>
       ) : (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
@@ -364,6 +340,7 @@ export default function Matriz({ user }) {
                               className="w-full border border-gray-200 rounded-lg p-2 text-xs focus:ring-2 focus:ring-blue-400 bg-white disabled:bg-gray-100 disabled:text-gray-600"
                               value={p.med_comment || ''}
                               onChange={(e) => handleMedCommentChange(p.id, e.target.value)}
+                              onBlur={(e) => handleCommentBlur(p.id, 'med_comment', e.target.value)}
                             />
                           </div>
                           
@@ -376,6 +353,7 @@ export default function Matriz({ user }) {
                               className="w-full border border-gray-200 rounded-lg p-2 text-xs focus:ring-2 focus:ring-teal-400 bg-white disabled:bg-gray-100 disabled:text-gray-600"
                               value={p.fisio_comment || ''}
                               onChange={(e) => handleFisioCommentChange(p.id, e.target.value)}
+                              onBlur={(e) => handleCommentBlur(p.id, 'fisio_comment', e.target.value)}
                             />
                           </div>
                         </div>
