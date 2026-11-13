@@ -12,7 +12,16 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabase'; 
 
-export default function Matriz({ user, categoryFilter }) {
+export default function Matriz({ user }) {
+  // 1. DEFINIR QUÉ CATEGORÍAS PUEDE VER ESTE USUARIO
+  const allCats = ['Mayor', 'Especial', 'Cat A', 'Cat B', 'Sub-15', 'Sub-13'];
+  const availableCategories = (user.role === 'DIRECTOR' || user.categories?.includes('ALL')) 
+    ? allCats 
+    : user.categories;
+
+  // 2. ESTADO PARA LA PESTAÑA ACTIVA (Por defecto, la primera que tenga permitida)
+  const [activeCategory, setActiveCategory] = useState(availableCategories[0] || 'Mayor');
+
   const [players, setPlayers] = useState([]);
   const [contextoDia, setContextoDia] = useState('Entrenamiento');
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -39,20 +48,17 @@ export default function Matriz({ user, categoryFilter }) {
         return { ...p, status: currentStatus };
       });
 
-      const visible = processedPlayers.filter((p) => {
-        const hasCategoryAccess = user.categories.includes(p.category);
-        if (user.role === 'DIRECTOR') return p.category === 'Mayor'; // Director solo ve Mayor aquí
-        const matchesMenu = categoryFilter === 'Todas' ? true : p.category === categoryFilter;
-        return hasCategoryAccess && matchesMenu;
-      });
-
+      // FILTRO ESTRICTO: Solo muestra los de la Pestaña Activa
+      const visible = processedPlayers.filter((p) => p.category === activeCategory);
       setPlayers(visible);
     }
   };
 
-  useEffect(() => { fetchPlayers(); }, [user, categoryFilter]);
+  // Recargar los jugadores cada vez que cambias de pestaña
+  useEffect(() => { 
+    fetchPlayers(); 
+  }, [user, activeCategory]);
 
-  // Manejo separado de comentarios
   const handleMedCommentChange = (id, text) => {
     setPlayers(players.map((p) => (p.id === id ? { ...p, med_comment: text } : p)));
   };
@@ -67,7 +73,6 @@ export default function Matriz({ user, categoryFilter }) {
     await supabase.from('jugadores').update({ status: newStatus }).eq('id', id);
   };
 
-  // BOTONES CRIO Y MASAJE (Exclusivos para LFT Mayor 2)
   const handleTherapyToggle = async (id, field, currentValue) => {
     if (user.username !== 'lft.mayor2') return;
     const newValue = !currentValue;
@@ -90,19 +95,18 @@ export default function Matriz({ user, categoryFilter }) {
         
         await supabase.from('jugadores').update({
           evolution: [...currentEvo, newEvo],
-          med_comment: '', // Limpiamos campos diarios después de guardar en historial
+          med_comment: '',
           fisio_comment: '',
           crio_hoy: false,
           masaje_hoy: false
         }).eq('id', p.id);
       } else if (p.crio_hoy || p.masaje_hoy) {
-        // Limpiamos los checks al final del día
         await supabase.from('jugadores').update({ crio_hoy: false, masaje_hoy: false }).eq('id', p.id);
       }
     }
 
     setSavedSuccess(true);
-    fetchPlayers(); // Recargamos para ver los campos limpios
+    fetchPlayers();
     setTimeout(() => setSavedSuccess(false), 3000);
   };
 
@@ -114,7 +118,8 @@ export default function Matriz({ user, categoryFilter }) {
     const enCrio = players.filter(p => p.crio_hoy);
     const enMasaje = players.filter(p => p.masaje_hoy);
 
-    const tituloCategoria = user.role === 'DIRECTOR' ? 'Mayor' : categoryFilter;
+    // El título ahora es exactamente la pestaña que tienes abierta
+    const tituloCategoria = activeCategory; 
     let reporteHTML = '';
 
     if (todosAptos) {
@@ -131,7 +136,6 @@ export default function Matriz({ user, categoryFilter }) {
         const diagInfo = lastInjury ? lastInjury.diagnosis : 'Evaluación médica en curso';
         const esCronico = lastInjury && Number(lastInjury.timeLoss) > 10;
 
-        // LÓGICA PACIENTES CRÓNICOS
         if (esCronico) {
           return `
             <div style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px dashed #ccc; background-color: #f8fafc; padding: 10px; border-left: 4px solid #94a3b8;">
@@ -142,7 +146,6 @@ export default function Matriz({ user, categoryFilter }) {
             </div>`;
         }
 
-        // LÓGICA PACIENTES AGUDOS
         const timeLossDesc = lastInjury && lastInjury.timeLoss > 0 ? `ameritando un reposo estimado de <strong>${lastInjury.timeLoss} días</strong>.` : `<strong>no requiriendo reposo deportivo</strong> (sin time-loss).`;
         const comments = [];
         if (p.med_comment) comments.push(`<strong>Médico:</strong> ${p.med_comment}`);
@@ -160,7 +163,6 @@ export default function Matriz({ user, categoryFilter }) {
       }).join('');
     }
 
-    // TABLA RESUMEN TERAPIAS FÍSICAS (Al final del PDF)
     let resumenTerapias = '';
     if (enCrio.length > 0 || enMasaje.length > 0) {
       resumenTerapias = `
@@ -234,14 +236,11 @@ export default function Matriz({ user, categoryFilter }) {
 
   return (
     <div className="p-4 md:p-6 animate-fade-in relative">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b pb-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4 border-b pb-4">
         <div>
           <h2 className="text-2xl font-extrabold text-[#000080] flex items-center gap-3">
             <CalendarDays size={28} className="text-blue-600" /> Matriz de Disponibilidad
           </h2>
-          <p className="text-gray-500 font-bold mt-1">
-            Categoría: <span className="text-blue-500">{user.role === 'DIRECTOR' ? 'Mayor' : categoryFilter}</span>
-          </p>
         </div>
 
         <div className="flex items-center gap-3 w-full md:w-auto">
@@ -249,10 +248,29 @@ export default function Matriz({ user, categoryFilter }) {
             <option value="Entrenamiento">Entrenamiento</option><option value="Partido Oficial">Partido Oficial</option><option value="Partido Amistoso">Partido Amistoso</option><option value="Recuperación">Recuperación</option>
           </select>
           <button onClick={generarParteMedico} className="bg-white border-2 border-[#000080] text-[#000080] hover:bg-blue-50 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm transition-all flex-shrink-0">
-            <FileText size={18} /> Generar Reporte CT
+            <FileText size={18} /> Generar Reporte PDF
           </button>
         </div>
       </div>
+
+      {/* --- BOTONES DE NAVEGACIÓN DE CATEGORÍAS --- */}
+      {availableCategories.length > 1 && (
+        <div className="flex flex-wrap gap-2 mb-6 bg-gray-50 p-2 rounded-2xl border border-gray-200">
+          {availableCategories.map(cat => (
+            <button 
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-5 py-2 rounded-xl text-sm font-bold transition-all ${
+                activeCategory === cat 
+                ? 'bg-[#000080] text-white shadow-md' 
+                : 'bg-white text-gray-600 hover:bg-blue-50 hover:text-blue-700 border border-gray-200'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      )}
 
       {savedSuccess && (
         <div className="mb-4 bg-green-100 border border-green-300 text-green-800 px-4 py-3 rounded-xl flex items-center gap-2 font-bold shadow-sm">
@@ -261,8 +279,8 @@ export default function Matriz({ user, categoryFilter }) {
       )}
 
       {players.length === 0 ? (
-        <div className="bg-gray-50 p-8 text-center rounded-2xl border border-gray-200 text-gray-500">
-          <User size={40} className="mx-auto mb-3 text-gray-300" /> No hay jugadores visibles en esta categoría (Añádelos desde el Roster).
+        <div className="bg-gray-50 p-8 text-center rounded-2xl border border-gray-200 text-gray-500 mt-4">
+          <User size={40} className="mx-auto mb-3 text-gray-300" /> No hay jugadores registrados en la categoría {activeCategory}.
         </div>
       ) : (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
@@ -286,7 +304,6 @@ export default function Matriz({ user, categoryFilter }) {
                       <td className="p-4 align-top">
                         <p className="font-bold text-gray-800 text-lg leading-tight">{p.name}</p>
                         <p className="text-xs text-gray-500 font-medium mb-1">{p.category} • {p.position}</p>
-                        {/* PESO VISIBLE AQUÍ */}
                         <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-600 text-[10px] px-2 py-0.5 rounded font-bold border border-gray-200">
                           ⚖️ {p.weight ? `${p.weight} kg` : 'S/P'}
                         </span>
@@ -322,7 +339,6 @@ export default function Matriz({ user, categoryFilter }) {
                         )}
                         
                         <div className="space-y-2">
-                          {/* CAMPO EXCLUSIVO MÉDICO */}
                           <div>
                             <label className="text-[10px] font-bold text-blue-800 uppercase pl-1 block mb-0.5">Nota Médica (Dir. Médico)</label>
                             <input
@@ -335,7 +351,6 @@ export default function Matriz({ user, categoryFilter }) {
                             />
                           </div>
                           
-                          {/* CAMPO EXCLUSIVO FISIO */}
                           <div>
                             <label className="text-[10px] font-bold text-teal-800 uppercase pl-1 block mb-0.5">Abordaje Físico (Fisio)</label>
                             <input
