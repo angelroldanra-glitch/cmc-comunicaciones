@@ -13,15 +13,12 @@ import {
 import { supabase } from './supabase'; 
 
 export default function Matriz({ user }) {
-  // 1. DEFINIR QUÉ CATEGORÍAS PUEDE VER ESTE USUARIO
   const allCats = ['Mayor', 'Especial', 'Cat A', 'Cat B', 'Sub-15', 'Sub-13'];
   const availableCategories = (user.role === 'DIRECTOR' || user.categories?.includes('ALL')) 
     ? allCats 
     : user.categories;
 
-  // 2. ESTADO PARA LA PESTAÑA ACTIVA (Por defecto, la primera que tenga permitida)
   const [activeCategory, setActiveCategory] = useState(availableCategories[0] || 'Mayor');
-
   const [players, setPlayers] = useState([]);
   const [contextoDia, setContextoDia] = useState('Entrenamiento');
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -48,16 +45,12 @@ export default function Matriz({ user }) {
         return { ...p, status: currentStatus };
       });
 
-      // FILTRO ESTRICTO: Solo muestra los de la Pestaña Activa
       const visible = processedPlayers.filter((p) => p.category === activeCategory);
       setPlayers(visible);
     }
   };
 
-  // Recargar los jugadores cada vez que cambias de pestaña
-  useEffect(() => { 
-    fetchPlayers(); 
-  }, [user, activeCategory]);
+  useEffect(() => { fetchPlayers(); }, [user, activeCategory]);
 
   const handleMedCommentChange = (id, text) => {
     setPlayers(players.map((p) => (p.id === id ? { ...p, med_comment: text } : p)));
@@ -82,14 +75,19 @@ export default function Matriz({ user }) {
 
   const handleSave = async () => {
     for (const p of players) {
-      if (p.med_comment || p.fisio_comment) {
+      const hasNotes = p.med_comment || p.fisio_comment;
+      const hasTherapy = p.crio_hoy || p.masaje_hoy;
+
+      if (hasNotes || hasTherapy) {
         const notasFormateadas = [];
-        if (p.med_comment) notasFormateadas.push(`Abordaje Médico: ${p.med_comment}`);
-        if (p.fisio_comment) notasFormateadas.push(`Terapia Física: ${p.fisio_comment}`);
+        if (p.med_comment) notasFormateadas.push(`Médico: ${p.med_comment}`);
+        if (p.fisio_comment) notasFormateadas.push(`Fisio: ${p.fisio_comment}`);
+        if (p.crio_hoy) notasFormateadas.push(`+ Crioterapia`);
+        if (p.masaje_hoy) notasFormateadas.push(`+ Masaje de Descarga`);
 
         const newEvo = {
           date: new Date().toLocaleDateString('es-ES'),
-          note: `Parte Clínico (${contextoDia}):\n` + notasFormateadas.join('\n'),
+          note: `Abordaje Diario (${contextoDia}):\n` + notasFormateadas.join('\n'),
         };
         const currentEvo = p.evolution || [];
         
@@ -100,8 +98,6 @@ export default function Matriz({ user }) {
           crio_hoy: false,
           masaje_hoy: false
         }).eq('id', p.id);
-      } else if (p.crio_hoy || p.masaje_hoy) {
-        await supabase.from('jugadores').update({ crio_hoy: false, masaje_hoy: false }).eq('id', p.id);
       }
     }
 
@@ -112,86 +108,107 @@ export default function Matriz({ user }) {
 
   const generarParteMedico = () => {
     const ventana = window.open('', '_blank');
-    const lesionados = players.filter((p) => p.status === 'Baja' || p.status === 'Diferenciado');
-    const todosAptos = lesionados.length === 0;
-
+    
+    // Filtramos y separamos por grupos exactos
+    const bajas = players.filter(p => p.status === 'Baja' || p.status === 'Diferenciado');
+    const aptosConNotas = players.filter(p => p.status === 'Apto' && (p.med_comment || p.fisio_comment));
     const enCrio = players.filter(p => p.crio_hoy);
     const enMasaje = players.filter(p => p.masaje_hoy);
 
-    // El título ahora es exactamente la pestaña que tienes abierta
-    const tituloCategoria = activeCategory; 
+    const todosAptos = bajas.length === 0 && aptosConNotas.length === 0 && enCrio.length === 0 && enMasaje.length === 0;
+
     let reporteHTML = '';
 
     if (todosAptos) {
       reporteHTML = `
         <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 20px; border-radius: 8px; text-align: center; margin: 30px 0;">
           <h3 style="margin: 0; font-size: 18px;">✅ DÍA SIN INCIDENTES MÉDICOS</h3>
-          <p style="margin-top: 10px; font-size: 15px;">Todo el plantel se encuentra en óptimas condiciones y a total disposición.</p>
+          <p style="margin-top: 10px; font-size: 15px;">Todo el plantel se encuentra Apto y a total disposición, sin novedades médicas que reportar.</p>
         </div>
       `;
     } else {
-      reporteHTML = lesionados.map((p) => {
-        const estadoDesc = p.status === 'Baja' ? 'no está disponible (Baja Médica)' : 'realizará trabajo diferenciado';
-        const lastInjury = p.history && p.history.length > 0 ? p.history[p.history.length - 1] : null;
-        const diagInfo = lastInjury ? lastInjury.diagnosis : 'Evaluación médica en curso';
-        const esCronico = lastInjury && Number(lastInjury.timeLoss) > 10;
+      
+      // 1. SECCIÓN DE BAJAS Y DIFERENCIADOS
+      if (bajas.length > 0) {
+        reporteHTML += `<h3 style="color: #b91c1c; border-bottom: 2px solid #b91c1c; padding-bottom: 5px; text-transform: uppercase;">🔴 Jugadores No Disponibles o Diferenciados</h3>`;
+        reporteHTML += bajas.map(p => {
+          const estadoDesc = p.status === 'Baja' ? 'Baja Médica (No Disponible)' : 'Trabajo Diferenciado';
+          const lastInjury = p.history && p.history.length > 0 ? p.history[p.history.length - 1] : null;
+          const esCronico = lastInjury && Number(lastInjury.timeLoss) > 10;
 
-        if (esCronico) {
+          if (esCronico && p.status === 'Baja') {
+            return `
+              <div style="margin-bottom: 15px; padding: 10px; background-color: #f8fafc; border-left: 4px solid #94a3b8;">
+                <p style="margin: 0; line-height: 1.5; color: #475569;">
+                  <strong>${p.name} (${p.position}) - Baja Médica Prolongada.</strong><br/>
+                  Continúa en su fase de rehabilitación correspondiente, sin fecha de retorno a corto plazo.
+                </p>
+              </div>`;
+          }
+
+          const comments = [];
+          if (p.med_comment) comments.push(`<strong>Médico:</strong> ${p.med_comment}`);
+          if (p.fisio_comment) comments.push(`<strong>Fisio:</strong> ${p.fisio_comment}`);
+          const currentManejo = comments.length > 0 ? comments.join(' | ') : 'Manejo médico en curso';
+
           return `
-            <div style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px dashed #ccc; background-color: #f8fafc; padding: 10px; border-left: 4px solid #94a3b8;">
-              <p style="margin: 0; line-height: 1.5; color: #475569;">
-                <strong>${p.name} (${p.position}) - Baja Médica Prolongada.</strong><br/>
-                Diagnóstico conocido: <em>${diagInfo}</em>. Continúa en su fase de rehabilitación correspondiente, sin fecha de retorno a corto plazo.
+            <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #ccc;">
+              <p style="margin: 0 0 5px 0; line-height: 1.6;">
+                <strong>${p.name}</strong> (${p.position}) - <strong>${estadoDesc}</strong>.<br/> 
+                Abordaje / Observación: <em>${currentManejo}</em>
               </p>
             </div>`;
+        }).join('');
+      }
+
+      // 2. SECCIÓN DE JUGADORES APTOS PERO CON COMENTARIO
+      if (aptosConNotas.length > 0) {
+        reporteHTML += `<h3 style="color: #15803d; border-bottom: 2px solid #15803d; padding-bottom: 5px; margin-top: 30px; text-transform: uppercase;">🟢 Jugadores Disponibles (Con Observaciones)</h3>`;
+        reporteHTML += aptosConNotas.map(p => {
+          const comments = [];
+          if (p.med_comment) comments.push(`<strong>Médico:</strong> ${p.med_comment}`);
+          if (p.fisio_comment) comments.push(`<strong>Fisio:</strong> ${p.fisio_comment}`);
+          
+          return `
+            <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #ccc;">
+              <p style="margin: 0 0 5px 0; line-height: 1.6;">
+                <strong>${p.name}</strong> (${p.position}) - <strong>Disponible</strong>.<br/> 
+                <em>${comments.join(' | ')}</em>
+              </p>
+            </div>`;
+        }).join('');
+      }
+
+      // 3. SECCIÓN DE LISTAS DE PROCEDIMIENTOS (CRIO Y MASAJE)
+      if (enCrio.length > 0 || enMasaje.length > 0) {
+        reporteHTML += `<h3 style="color: #000080; border-bottom: 2px solid #000080; padding-bottom: 5px; margin-top: 30px; text-transform: uppercase;">⚡ Procedimientos de Prevención y Recuperación</h3>`;
+        
+        reporteHTML += `<div style="display: flex; gap: 20px; margin-top: 15px;">`;
+        
+        // Tabla Crio
+        reporteHTML += `<div style="flex: 1; background: #f0f9ff; padding: 15px; border-radius: 8px; border: 1px solid #bae6fd;">`;
+        reporteHTML += `<h4 style="margin-top: 0; margin-bottom: 10px; color: #0369a1;">❄️ Lista de Crioterapia</h4>`;
+        reporteHTML += `<ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #1e3a8a;">`;
+        if (enCrio.length > 0) {
+          enCrio.forEach(p => { reporteHTML += `<li><strong>${p.name}</strong></li>`; });
+        } else {
+          reporteHTML += `<li>Ninguno reportado</li>`;
         }
+        reporteHTML += `</ul></div>`;
 
-        const timeLossDesc = lastInjury && lastInjury.timeLoss > 0 ? `ameritando un reposo estimado de <strong>${lastInjury.timeLoss} días</strong>.` : `<strong>no requiriendo reposo deportivo</strong> (sin time-loss).`;
-        const comments = [];
-        if (p.med_comment) comments.push(`<strong>Médico:</strong> ${p.med_comment}`);
-        if (p.fisio_comment) comments.push(`<strong>Fisio:</strong> ${p.fisio_comment}`);
-        const currentManejo = comments.length > 0 ? comments.join(' | ') : 'Terapia de rutina';
+        // Tabla Masaje
+        reporteHTML += `<div style="flex: 1; background: #f0fdfa; padding: 15px; border-radius: 8px; border: 1px solid #99f6e4;">`;
+        reporteHTML += `<h4 style="margin-top: 0; margin-bottom: 10px; color: #0f766e;">💆 Lista de Masaje / Descarga</h4>`;
+        reporteHTML += `<ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #134e4a;">`;
+        if (enMasaje.length > 0) {
+          enMasaje.forEach(p => { reporteHTML += `<li><strong>${p.name}</strong></li>`; });
+        } else {
+          reporteHTML += `<li>Ninguno reportado</li>`;
+        }
+        reporteHTML += `</ul></div>`;
 
-        return `
-          <div style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px dashed #ccc;">
-            <p style="margin: 0 0 10px 0; line-height: 1.6;">
-              El jugador <strong>${p.name}</strong> (${p.position}) <strong>${estadoDesc}</strong>.<br/> 
-              Diagnóstico: <em>${diagInfo}</em>.<br/>
-              Abordaje hoy: <em>${currentManejo}</em>, por lo que ${timeLossDesc}
-            </p>
-          </div>`;
-      }).join('');
-    }
-
-    let resumenTerapias = '';
-    if (enCrio.length > 0 || enMasaje.length > 0) {
-      resumenTerapias = `
-        <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #000080;">
-          <h4 style="color: #000080; margin-bottom: 15px; text-transform: uppercase;">Resumen de Terapias y Prevención</h4>
-          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-            <thead>
-              <tr style="background-color: #f3f4f6;">
-                <th style="padding: 10px; border: 1px solid #e5e7eb; text-align: left; width: 50%;">❄️ Crioterapia (Tinas de Hielo)</th>
-                <th style="padding: 10px; border: 1px solid #e5e7eb; text-align: left; width: 50%;">💆 Masaje Preventivo / Descarga</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style="padding: 10px; border: 1px solid #e5e7eb; vertical-align: top;">
-                  <ul style="margin: 0; padding-left: 20px;">
-                    ${enCrio.map(p => `<li>${p.name}</li>`).join('') || '<li style="color: #9ca3af;">Ninguno registrado hoy</li>'}
-                  </ul>
-                </td>
-                <td style="padding: 10px; border: 1px solid #e5e7eb; vertical-align: top;">
-                  <ul style="margin: 0; padding-left: 20px;">
-                    ${enMasaje.map(p => `<li>${p.name}</li>`).join('') || '<li style="color: #9ca3af;">Ninguno registrado hoy</li>'}
-                  </ul>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      `;
+        reporteHTML += `</div>`; // Cierre del flex
+      }
     }
 
     const baseCSS = `
@@ -216,11 +233,11 @@ export default function Matriz({ user }) {
         
         <p style="text-align: right; color: #6b7280; font-size: 14px;"><strong>Fecha:</strong> ${new Date().toLocaleDateString('es-ES')}</p>
         <p style="font-size: 16px; font-weight: bold; margin-top: 30px;">Querido Cuerpo Técnico,</p>
-        <p style="font-size: 15px; line-height: 1.6; margin-bottom: 30px;">Por medio de la presente es un gusto saludarles. A continuación, brindo el resumen de disponibilidad y novedades médicas correspondiente a la jornada de <strong>${contextoDia}</strong>:</p>
+        <p style="font-size: 15px; line-height: 1.6; margin-bottom: 30px;">A continuación, se detalla el reporte de disponibilidad médica y preventivo correspondiente a la jornada de <strong>${contextoDia}</strong>:</p>
 
         ${reporteHTML}
-        ${!todosAptos ? `<p style="font-size: 15px; margin-top: 20px; color: #15803d; font-weight: bold;">El resto del plantel no mencionado en este reporte se encuentra APTO y a total disposición.</p>` : ''}
-        ${resumenTerapias}
+
+        <p style="font-size: 14px; margin-top: 30px; color: #4b5563; font-style: italic;">* Los jugadores del plantel no mencionados en este documento se encuentran 100% aptos y sin observaciones médicas.</p>
 
         <div class="footer">
           <div class="signature">${user.name}</div>
@@ -248,12 +265,11 @@ export default function Matriz({ user }) {
             <option value="Entrenamiento">Entrenamiento</option><option value="Partido Oficial">Partido Oficial</option><option value="Partido Amistoso">Partido Amistoso</option><option value="Recuperación">Recuperación</option>
           </select>
           <button onClick={generarParteMedico} className="bg-white border-2 border-[#000080] text-[#000080] hover:bg-blue-50 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm transition-all flex-shrink-0">
-            <FileText size={18} /> Generar Reporte PDF
+            <FileText size={18} /> 1. Generar Reporte PDF
           </button>
         </div>
       </div>
 
-      {/* --- BOTONES DE NAVEGACIÓN DE CATEGORÍAS --- */}
       {availableCategories.length > 1 && (
         <div className="flex flex-wrap gap-2 mb-6 bg-gray-50 p-2 rounded-2xl border border-gray-200">
           {availableCategories.map(cat => (
@@ -274,7 +290,7 @@ export default function Matriz({ user }) {
 
       {savedSuccess && (
         <div className="mb-4 bg-green-100 border border-green-300 text-green-800 px-4 py-3 rounded-xl flex items-center gap-2 font-bold shadow-sm">
-          <CheckCircle size={20} /> Base de datos actualizada (Campos diarios limpiados para mañana).
+          <CheckCircle size={20} /> Datos guardados en historiales clínicos y tabla limpiada.
         </div>
       )}
 
@@ -406,7 +422,7 @@ export default function Matriz({ user }) {
                 onClick={handleSave}
                 className="bg-[#000080] hover:bg-blue-900 text-white px-6 py-3 rounded-xl flex items-center gap-2 font-bold shadow-md transition-all"
               >
-                <Save size={20} /> Guardar Cambios en Historial (Fin del Día)
+                <Save size={20} /> 2. Guardar Historial (Cierre de Día)
               </button>
             </div>
           )}
