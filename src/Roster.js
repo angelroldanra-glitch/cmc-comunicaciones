@@ -1,22 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-  ShieldAlert,
-  Send,
-  Activity,
-  User,
-  Plus,
-  X,
-  Mic,
-  FileSearch,
-  Search,
-  Printer,
-  Download,
-  Phone,
-  Paperclip,
-  FileText,
-  Edit,
-  Camera,
-  Edit2
+  ShieldAlert, Send, Activity, User, Plus, X, Mic, FileSearch, Search,
+  Printer, Download, Phone, Paperclip, FileText, Edit, Camera, Edit2, ArrowUp, Star
 } from 'lucide-react';
 import { supabase } from './supabase'; 
 
@@ -84,7 +69,6 @@ export default function Roster({ user, categoryFilter }) {
 
   const canAddPlayer = user.role === 'DIRECTOR' || user.role === 'FISIO';
 
-  // --- SUBIDA DE FOTO A SUPABASE STORAGE ---
   const handlePhotoUpload = async (e, setFormFunc) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -113,7 +97,7 @@ export default function Roster({ user, categoryFilter }) {
       dorsal: newPlayerForm.dorsal ? Number(newPlayerForm.dorsal) : null,
       weight: newPlayerForm.weight ? Number(newPlayerForm.weight) : null,
       height: newPlayerForm.height ? Number(newPlayerForm.height) : null,
-      status: 'Apto', history: [], evolution: [],
+      status: 'Apto', history: [], evolution: [], convocado: false,
       weightHistory: newPlayerForm.weight ? [{ date: new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }), weight: Number(newPlayerForm.weight) }] : [],
     };
 
@@ -138,6 +122,16 @@ export default function Roster({ user, categoryFilter }) {
     if (data) {
       setPlayers(players.map((p) => (p.id === selectedPlayer.id ? data[0] : p)));
       setSelectedPlayer(data[0]); setShowEditPlayer(false);
+    }
+  };
+
+  // NUEVO: Función para alternar la convocatoria a la Mayor
+  const handleToggleConvocatoria = async () => {
+    const newValue = !selectedPlayer.convocado;
+    const { data } = await supabase.from('jugadores').update({ convocado: newValue }).eq('id', selectedPlayer.id).select();
+    if (data) {
+      setSelectedPlayer(data[0]);
+      setPlayers(players.map(p => p.id === data[0].id ? data[0] : p));
     }
   };
 
@@ -168,13 +162,11 @@ export default function Roster({ user, categoryFilter }) {
     setNewInjuryForm({ date: '', diagnosis: '', area: '', historyText: '', treatment: '', medId: '', medQty: '', timeLoss: '0', context: 'Entrenamiento', laterality: 'N/A', relapse: false, interconsulta: false });
   };
 
-  // --- EDITAR LESIÓN EN LA NUBE ---
   const handleUpdateInjury = async (e) => {
     e.preventDefault();
     let updatedHistory = [...(selectedPlayer.history || [])];
     updatedHistory[editingInjuryIndex] = editInjuryForm;
     
-    // Recalcular estado (opcional, por si le quitamos o ponemos time loss)
     const activeInjuries = updatedHistory.filter(h => Number(h.timeLoss) > 0);
     const newStatus = activeInjuries.length > 0 ? 'Baja' : 'Apto';
 
@@ -211,7 +203,6 @@ export default function Roster({ user, categoryFilter }) {
   };
 
   const generarPDF = (tipo, data) => {
-    // ... Todo el generador de PDF se mantiene idéntico ...
     const ventana = window.open('', '_blank');
     let contenido = '';
 
@@ -339,7 +330,6 @@ export default function Roster({ user, categoryFilter }) {
         <div className="bg-white p-6 rounded-2xl shadow-sm mb-6 border border-gray-200">
           <div className="flex flex-col md:flex-row justify-between items-start gap-4">
             <div className="flex items-center gap-4">
-              {/* --- FOTO DE PERFIL --- */}
               <div className="w-20 h-20 md:w-24 md:h-24 bg-gray-100 border border-gray-200 rounded-full overflow-hidden flex-shrink-0 shadow-sm flex items-center justify-center">
                 {selectedPlayer.photo_url ? (
                   <img src={selectedPlayer.photo_url} alt={selectedPlayer.name} className="w-full h-full object-cover" />
@@ -351,10 +341,29 @@ export default function Roster({ user, categoryFilter }) {
                 <h2 className="text-3xl font-extrabold text-[#000080]">
                   <span className="text-gray-400 mr-2">#{selectedPlayer.dorsal || 'N/A'}</span>{selectedPlayer.name}
                 </h2>
-                <p className="text-gray-500 mb-2">{selectedPlayer.category} | {selectedPlayer.position}</p>
-                <span className={`px-4 py-1.5 rounded-full font-bold shadow-sm text-sm ${selectedPlayer.status === 'Apto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                  {selectedPlayer.status}
-                </span>
+                <div className="flex items-center gap-2 mb-2">
+                  <p className="text-gray-500 font-medium">{selectedPlayer.category} | {selectedPlayer.position}</p>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <span className={`px-4 py-1.5 rounded-full font-bold shadow-sm text-sm ${selectedPlayer.status === 'Apto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    {selectedPlayer.status}
+                  </span>
+                  
+                  {/* BOTÓN MÁGICO DE CONVOCATORIA */}
+                  {selectedPlayer.category !== 'Mayor' && (user.role === 'DIRECTOR' || user.role === 'FISIO') && (
+                    <button
+                      onClick={handleToggleConvocatoria}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-1 ${
+                        selectedPlayer.convocado 
+                          ? 'bg-purple-100 text-purple-700 border-purple-300 shadow-sm' 
+                          : 'bg-white text-gray-500 border-gray-300 hover:bg-purple-50 hover:text-purple-600'
+                      }`}
+                    >
+                      {selectedPlayer.convocado ? <><Star size={14} /> Convocado a Mayor</> : <><ArrowUp size={14} /> Convocar a Mayor</>}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -422,7 +431,6 @@ export default function Roster({ user, categoryFilter }) {
                   {pHist.map((lesion, i) => (
                     <div key={i} className={`border-l-4 p-4 rounded-r-lg relative ${lesion.interconsulta ? 'border-yellow-500 bg-yellow-50' : 'border-red-500 bg-red-50'}`}>
                       <div className="absolute top-4 right-4 flex gap-2">
-                        {/* --- BOTÓN PARA EDITAR LESIÓN --- */}
                         <button onClick={() => { setEditInjuryForm(lesion); setEditingInjuryIndex(i); setShowEditInjury(true); }} className="text-blue-700 hover:bg-blue-100 p-2 rounded-lg flex items-center gap-1 text-xs font-bold transition" title="Editar Historial">
                           <Edit2 size={14} /> Editar
                         </button>
@@ -485,7 +493,6 @@ export default function Roster({ user, categoryFilter }) {
           </div>
         )}
 
-        {/* MODAL: EDITAR LESIÓN (LÁPIZ) */}
         {showEditInjury && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-2xl relative overflow-y-auto max-h-[90vh]">
@@ -546,7 +553,6 @@ export default function Roster({ user, categoryFilter }) {
           </div>
         )}
 
-        {/* ... Modal de Exámenes y Registrar Lesión ... */}
         {showExams && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 w-full max-w-xl shadow-2xl relative">
@@ -683,7 +689,6 @@ export default function Roster({ user, categoryFilter }) {
           </div>
         )}
 
-        {/* MODAL: EDITAR JUGADOR (CON FOTO) */}
         {showEditPlayer && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl relative overflow-y-auto max-h-[90vh]">
@@ -756,7 +761,6 @@ export default function Roster({ user, categoryFilter }) {
             </div>
           </div>
         )}
-
       </div>
     );
   }
@@ -801,14 +805,18 @@ export default function Roster({ user, categoryFilter }) {
                     {p.status}
                   </span>
                 </div>
-                <p className="text-xs text-gray-500 font-medium">{p.category} • {p.position} {p.dorsal ? `• #${p.dorsal}` : ''}</p>
+                <div className="flex flex-col">
+                  <p className="text-xs text-gray-500 font-medium">{p.category} • {p.position} {p.dorsal ? `• #${p.dorsal}` : ''}</p>
+                  {p.convocado && (
+                    <span className="text-[9px] font-bold text-purple-600 bg-purple-50 rounded px-1 w-max mt-0.5 border border-purple-100">🌟 Convocado a Mayor</span>
+                  )}
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* MODAL: NUEVO JUGADOR (CON FOTO) */}
       {showNewPlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl relative overflow-y-auto max-h-[90vh]">
